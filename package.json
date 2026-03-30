@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@onecli-sh/sdk": "^0.2.0",
+    "@wecom/aibot-node-sdk": "^1.0.4",
     "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0"
   },

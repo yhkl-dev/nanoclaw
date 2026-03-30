@@ -9,4 +9,6 @@
 
 // telegram
 
+import './wecom.js';
+
 // whatsapp

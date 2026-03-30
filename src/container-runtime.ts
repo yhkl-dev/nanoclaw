@@ -3,6 +3,7 @@
  * All runtime-specific logic lives here so swapping runtimes means changing one file.
  */
 import { execSync } from 'child_process';
+import fs from 'fs';
 import os from 'os';
 
 import { logger } from './logger.js';
@@ -10,13 +11,41 @@ import { logger } from './logger.js';
 /** The container runtime binary name. */
 export const CONTAINER_RUNTIME_BIN = 'docker';
 
+/** Hostname containers use to reach the host machine. */
+export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
+
+/**
+ * Address the credential proxy binds to.
+ * Docker Desktop / WSL: loopback is reachable through host.docker.internal.
+ * Bare-metal Linux: prefer docker0 bridge; otherwise fail closed to loopback.
+ * Users with custom networking can override this via CREDENTIAL_PROXY_HOST.
+ */
+export const PROXY_BIND_HOST =
+  process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
+
+function detectProxyBindHost(): string {
+  if (os.platform() === 'darwin') return '127.0.0.1';
+  if (fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')) return '127.0.0.1';
+
+  const ifaces = os.networkInterfaces();
+  const docker0 = ifaces.docker0;
+  if (docker0) {
+    const ipv4 = docker0.find((addr) => addr.family === 'IPv4');
+    if (ipv4) return ipv4.address;
+  }
+  logger.warn(
+    'docker0 not found; binding credential proxy to 127.0.0.1. Set CREDENTIAL_PROXY_HOST to override.',
+  );
+  return '127.0.0.1';
+}
+
 /** CLI args needed for the container to resolve the host gateway. */
 export function hostGatewayArgs(): string[] {
-  // On Linux, host.docker.internal isn't built-in — add it explicitly
-  if (os.platform() === 'linux') {
-    return ['--add-host=host.docker.internal:host-gateway'];
-  }
-  return [];
+  // Explicitly add the host-gateway mapping anywhere Docker supports it.
+  // This is required on Linux, and also fixes Colima on macOS where
+  // host.docker.internal is not provided automatically.
+  if (os.platform() === 'win32') return [];
+  return ['--add-host=host.docker.internal:host-gateway'];
 }
 
 /** Returns CLI args for a readonly bind mount. */

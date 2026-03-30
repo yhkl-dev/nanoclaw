@@ -8,13 +8,18 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // Mock config
 vi.mock('./config.js', () => ({
+  ANTHROPIC_MODEL: undefined,
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
+  CREDENTIAL_PROXY_PORT: 3001,
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
-  ONECLI_URL: 'http://localhost:10254',
+  MODEL_BACKEND: 'claude',
+  OLLAMA_ADMIN_TOOLS: false,
+  OLLAMA_HOST: undefined,
+  OLLAMA_MODEL: undefined,
   TIMEZONE: 'America/Los_Angeles',
 }));
 
@@ -53,21 +58,15 @@ vi.mock('./mount-security.js', () => ({
 
 // Mock container-runtime
 vi.mock('./container-runtime.js', () => ({
+  CONTAINER_HOST_GATEWAY: 'host.docker.internal',
   CONTAINER_RUNTIME_BIN: 'docker',
   hostGatewayArgs: () => [],
   readonlyMountArgs: (h: string, c: string) => ['-v', `${h}:${c}:ro`],
   stopContainer: vi.fn(),
 }));
 
-// Mock OneCLI SDK
-vi.mock('@onecli-sh/sdk', () => ({
-  OneCLI: class {
-    applyContainerConfig = vi.fn().mockResolvedValue(true);
-    createAgent = vi.fn().mockResolvedValue({ id: 'test' });
-    ensureAgent = vi
-      .fn()
-      .mockResolvedValue({ name: 'test', identifier: 'test', created: true });
-  },
+vi.mock('./credential-proxy.js', () => ({
+  detectAuthMode: vi.fn(() => 'api-key'),
 }));
 
 // Create a controllable fake ChildProcess
@@ -105,7 +104,11 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import {
+  runContainerAgent,
+  ContainerOutput,
+  normalizeOllamaHostForContainer,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -121,6 +124,23 @@ const testInput = {
   chatJid: 'test@g.us',
   isMain: false,
 };
+
+describe('normalizeOllamaHostForContainer', () => {
+  it('rewrites localhost to host.docker.internal', () => {
+    expect(normalizeOllamaHostForContainer('http://localhost:11434')).toBe(
+      'http://host.docker.internal:11434',
+    );
+    expect(normalizeOllamaHostForContainer('http://127.0.0.1:11434')).toBe(
+      'http://host.docker.internal:11434',
+    );
+  });
+
+  it('keeps non-loopback hosts unchanged', () => {
+    expect(normalizeOllamaHostForContainer('http://192.168.2.19:11434')).toBe(
+      'http://192.168.2.19:11434',
+    );
+  });
+});
 
 function emitOutputMarker(
   proc: ReturnType<typeof createFakeProcess>,

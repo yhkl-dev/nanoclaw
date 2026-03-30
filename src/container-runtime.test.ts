@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import os from 'os';
 
 // Mock logger
 vi.mock('./logger.js', () => ({
@@ -18,6 +19,7 @@ vi.mock('child_process', () => ({
 
 import {
   CONTAINER_RUNTIME_BIN,
+  hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
   ensureContainerRuntimeRunning,
@@ -35,6 +37,27 @@ describe('readonlyMountArgs', () => {
   it('returns -v flag with :ro suffix', () => {
     const args = readonlyMountArgs('/host/path', '/container/path');
     expect(args).toEqual(['-v', '/host/path:/container/path:ro']);
+  });
+});
+
+describe('hostGatewayArgs', () => {
+  it('adds host-gateway mapping on macOS', () => {
+    vi.spyOn(os, 'platform').mockReturnValue('darwin');
+    expect(hostGatewayArgs()).toEqual([
+      '--add-host=host.docker.internal:host-gateway',
+    ]);
+  });
+
+  it('adds host-gateway mapping on Linux', () => {
+    vi.spyOn(os, 'platform').mockReturnValue('linux');
+    expect(hostGatewayArgs()).toEqual([
+      '--add-host=host.docker.internal:host-gateway',
+    ]);
+  });
+
+  it('skips host-gateway mapping on Windows', () => {
+    vi.spyOn(os, 'platform').mockReturnValue('win32');
+    expect(hostGatewayArgs()).toEqual([]);
   });
 });
 
