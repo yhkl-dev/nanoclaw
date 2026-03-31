@@ -475,7 +475,9 @@ describe('runDirectOllamaAgent', () => {
     expect(result.result).toBe('script ok');
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body.messages.at(-1)?.content).toContain('"city": "Shanghai"');
-    expect(body.messages.at(-1)?.content).toContain('Summarize the task output');
+    expect(body.messages.at(-1)?.content).toContain(
+      'Summarize the task output',
+    );
   });
 
   it('surfaces scheduled task script failures', async () => {

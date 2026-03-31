@@ -542,9 +542,9 @@ async function runScript(
           const result = JSON.parse(lastLine);
           if (typeof result.wakeAgent !== 'boolean') {
             logger.warn(
-                { output: lastLine.slice(0, 200) },
-                'Task script output missing wakeAgent',
-              );
+              { output: lastLine.slice(0, 200) },
+              'Task script output missing wakeAgent',
+            );
             return resolve({
               kind: 'error',
               error: 'Task script output missing wakeAgent',
@@ -662,7 +662,9 @@ export async function runDirectOllamaAgent(
       logger.debug(
         {
           group: group.name,
-          toolCalls: responseMessage.tool_calls.map((call) => call.function.name),
+          toolCalls: responseMessage.tool_calls.map(
+            (call) => call.function.name,
+          ),
         },
         'Ollama requested tools',
       );
