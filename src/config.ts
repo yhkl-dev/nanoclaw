@@ -16,6 +16,7 @@ const envConfig = readEnvFile([
   'OLLAMA_HOST',
   'OLLAMA_HTTP_ALLOW_PRIVATE',
   'OLLAMA_MODEL',
+  'OLLAMA_THINK',
   'TZ',
   'WECOM_BOT_ID',
   'WECOM_BOT_SECRET',
@@ -41,6 +42,10 @@ export const OLLAMA_HTTP_ALLOW_PRIVATE =
   (process.env.OLLAMA_HTTP_ALLOW_PRIVATE ||
     envConfig.OLLAMA_HTTP_ALLOW_PRIVATE) === 'true';
 export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || envConfig.OLLAMA_MODEL;
+// OLLAMA_THINK: set to 'true' to enable extended thinking for qwen3-style models.
+// Defaults to false because thinking mode makes tool calling unreliable.
+export const OLLAMA_THINK =
+  (process.env.OLLAMA_THINK || envConfig.OLLAMA_THINK) === 'true';
 export const WECOM_BOT_ID = process.env.WECOM_BOT_ID || envConfig.WECOM_BOT_ID;
 export const WECOM_BOT_SECRET =
   process.env.WECOM_BOT_SECRET || envConfig.WECOM_BOT_SECRET;

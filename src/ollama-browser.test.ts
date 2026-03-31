@@ -135,6 +135,11 @@ describe('ollama browser tools', () => {
       expect.any(Object),
       expect.any(Function),
     );
+    const runCall = mockExecFile.mock.calls.find(
+      (call) => (call[1] as string[])[0] === 'run',
+    );
+    expect(runCall).toBeTruthy();
+    expect((runCall?.[1] as string[]).at(-1)).not.toContain('then;');
     expect(mockExecFile).toHaveBeenCalledWith(
       'docker',
       expect.arrayContaining([

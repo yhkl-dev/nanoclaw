@@ -124,15 +124,17 @@ function buildBrowserContainerCommand(): string {
       ...BLOCKED_BROWSER_IPV4_CIDRS.map(
         (cidr) => `iptables -A OUTPUT -d ${cidr} -j REJECT`,
       ),
-      'if command -v ip6tables >/dev/null 2>&1; then',
-      ...BLOCKED_BROWSER_IPV6_CIDRS.map(
-        (cidr) => `  ip6tables -A OUTPUT -d ${cidr} -j REJECT`,
-      ),
-      'fi',
+      [
+        'if command -v ip6tables >/dev/null 2>&1; then',
+        ...BLOCKED_BROWSER_IPV6_CIDRS.map(
+          (cidr) => `  ip6tables -A OUTPUT -d ${cidr} -j REJECT`,
+        ),
+        'fi',
+      ].join('\n'),
     );
   }
   lines.push(`touch ${BROWSER_READY_FILE}`, 'while true; do sleep 3600; done');
-  return lines.join('; ');
+  return lines.join('\n');
 }
 
 async function waitForBrowserContainerReady(

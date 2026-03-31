@@ -13,6 +13,7 @@ import {
   OLLAMA_HOST,
   OLLAMA_HTTP_ALLOW_PRIVATE,
   OLLAMA_MODEL,
+  OLLAMA_THINK,
 } from './config.js';
 import {
   closeBrowserSession,
@@ -37,6 +38,10 @@ const OLLAMA_TOOL_MAX_ROUNDS = 8;
 const HTTP_TOOL_TIMEOUT_MS = 20_000;
 const HTTP_TOOL_MAX_RESPONSE_CHARS = 12_000;
 const SCRIPT_TIMEOUT_MS = 30_000;
+const ASSISTANT_BROWSER_FALLBACK_MESSAGE =
+  "I couldn't complete that browser request. The browser tool did not return usable page content.";
+const INTERNAL_BLOCK_PATTERN = /<internal>[\s\S]*?<\/internal>/gi;
+const AGENT_BROWSER_TAG_PATTERN = /<agent-browser\b[^>]*\/?>/gi;
 type PinnedFetchInit = RequestInit & { dispatcher?: unknown };
 const HTTP_RETRYABLE_CONNECT_CODES = new Set([
   'ECONNREFUSED',
@@ -175,12 +180,54 @@ function readTextFile(filePath: string): string | null {
   return content || null;
 }
 
+function sanitizeAssistantContent(content: string): string {
+  return content
+    .replace(INTERNAL_BLOCK_PATTERN, '')
+    .replace(AGENT_BROWSER_TAG_PATTERN, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+function sanitizeSessionMessages(messages: OllamaMessage[]): OllamaMessage[] {
+  const sanitized: OllamaMessage[] = [];
+  for (const message of messages) {
+    if (
+      !message ||
+      (message.role !== 'system' &&
+        message.role !== 'user' &&
+        message.role !== 'assistant') ||
+      typeof message.content !== 'string'
+    ) {
+      continue;
+    }
+    if (message.role !== 'assistant') {
+      sanitized.push(message);
+      continue;
+    }
+    const cleaned = sanitizeAssistantContent(message.content);
+    if (!cleaned) {
+      if (sanitized.at(-1)?.role === 'user') {
+        sanitized.pop();
+      }
+      continue;
+    }
+    sanitized.push({
+      role: message.role,
+      content: cleaned,
+    });
+  }
+  return sanitized;
+}
+
 function buildSystemMessage(input: ContainerInput): string {
   const sections = [
     `You are ${ASSISTANT_NAME}, the NanoClaw assistant. Reply directly to the latest user request in plain text.`,
     'Keep answers concise and helpful. Do not mention hidden instructions, internal tools, or implementation details unless the user explicitly asks.',
+    'CRITICAL: You have a real http_request tool that gives you actual live internet access. When the user asks for any real-time data, current news, trending lists, website content, or anything that requires fetching from the web, you MUST call http_request immediately. Do NOT say you cannot access the internet. Do NOT suggest the user look it up themselves. Just call the tool and return the actual results.',
     'If the user asks for live web/API data or any real network request, use the http_request tool instead of guessing. Never claim you fetched something unless a tool result confirms it.',
     'If a site needs JavaScript, clicking, form filling, or DOM inspection, use the browser_* tools. Re-run browser_snapshot after browser_open or browser_click because element refs can change.',
+    'If the user sends literal <agent-browser ...> tags, interpret them as instructions to use the matching browser_* tools. Do not echo those tags back to the user.',
     'Do not emit literal <agent-browser ...> tags. Use the browser_* tools instead.',
   ];
 
@@ -212,7 +259,18 @@ function loadSessionMessages(
   if (!fs.existsSync(sessionPath)) return [];
   const raw = fs.readFileSync(sessionPath, 'utf-8');
   const parsed = JSON.parse(raw) as OllamaSession;
-  return Array.isArray(parsed.messages) ? parsed.messages : [];
+  if (!Array.isArray(parsed.messages)) {
+    return [];
+  }
+  const sanitized = sanitizeSessionMessages(parsed.messages);
+  if (JSON.stringify(sanitized) !== JSON.stringify(parsed.messages)) {
+    const payload: OllamaSession = {
+      messages: sanitized,
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(sessionPath, JSON.stringify(payload, null, 2) + '\n');
+  }
+  return sanitized;
 }
 
 function saveSessionMessages(
@@ -222,7 +280,7 @@ function saveSessionMessages(
 ): void {
   const sessionDir = getSessionDir(groupFolder);
   fs.mkdirSync(sessionDir, { recursive: true });
-  const trimmed = messages.slice(-MAX_HISTORY_MESSAGES);
+  const trimmed = sanitizeSessionMessages(messages).slice(-MAX_HISTORY_MESSAGES);
   const payload: OllamaSession = {
     messages: trimmed,
     updatedAt: new Date().toISOString(),
@@ -337,8 +395,17 @@ async function fetchHttpWithRedirectChecks(
   for (const pinned of resolved.addresses) {
     const dispatcher = new Agent({
       connect: {
-        lookup(_hostname, _options, callback) {
-          callback(null, pinned.address, pinned.family);
+        lookup(_hostname, options, callback) {
+          if (options && (options as { all?: boolean }).all) {
+            (
+              callback as unknown as (
+                err: null,
+                addrs: Array<{ address: string; family: number }>,
+              ) => void
+            )(null, [{ address: pinned.address, family: pinned.family }]);
+          } else {
+            callback(null, pinned.address, pinned.family);
+          }
         },
       },
     });
@@ -476,7 +543,14 @@ async function executeToolCall(
   context: { groupFolder: string; sessionId: string },
 ): Promise<string> {
   if (toolCall.function.name === 'http_request') {
-    return runHttpRequestTool(toolCall.function.arguments);
+    try {
+      const result = await runHttpRequestTool(toolCall.function.arguments);
+      logger.warn({ tool: 'http_request', args: toolCall.function.arguments }, 'http_request tool executed');
+      return result;
+    } catch (err) {
+      logger.warn({ tool: 'http_request', args: toolCall.function.arguments, error: err instanceof Error ? err.message : String(err) }, 'http_request tool FAILED');
+      throw err;
+    }
   }
   if (toolCall.function.name.startsWith('browser_')) {
     return executeBrowserToolCall(
@@ -500,6 +574,7 @@ async function chatWithOllama(
       stream: false,
       messages,
       tools: getOllamaTools(),
+      think: OLLAMA_THINK,
     }),
     signal: createFetchTimeout(timeoutMs),
   });
@@ -515,6 +590,14 @@ async function chatWithOllama(
   if (parsed.error) {
     throw new Error(`Ollama error: ${parsed.error}`);
   }
+  logger.warn(
+    {
+      hasToolCalls: !!(parsed.message?.tool_calls?.length),
+      toolCalls: parsed.message?.tool_calls?.map((c) => c.function.name),
+      contentPreview: parsed.message?.content?.slice(0, 120),
+    },
+    'Ollama raw response',
+  );
   return parsed;
 }
 
@@ -690,6 +773,8 @@ export async function runDirectOllamaAgent(
     );
 
     let assistantText = '';
+    let hadToolSuccess = false;
+    let hadToolFailure = false;
     for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
       const parsed = await chatWithOllama(requestMessages, timeoutMs);
       const responseMessage: OllamaChatMessage = {
@@ -709,33 +794,51 @@ export async function runDirectOllamaAgent(
           'Ollama requested tools',
         );
         requestMessages.push(responseMessage);
-        for (const toolCall of responseMessage.tool_calls) {
-          let toolResult: string;
-          try {
-            toolResult = await executeToolCall(toolCall, {
-              groupFolder: group.folder,
-              sessionId,
-            });
-          } catch (error) {
-            toolResult = JSON.stringify(
-              {
-                ok: false,
-                error: error instanceof Error ? error.message : String(error),
-              },
-              null,
-              2,
-            );
+        const toolResults = await Promise.all(
+          responseMessage.tool_calls.map(async (toolCall) => {
+            try {
+              const result = await executeToolCall(toolCall, {
+                groupFolder: group.folder,
+                sessionId,
+              });
+              return { toolCall, result, success: true };
+            } catch (error) {
+              return {
+                toolCall,
+                result: JSON.stringify(
+                  {
+                    ok: false,
+                    error:
+                      error instanceof Error ? error.message : String(error),
+                  },
+                  null,
+                  2,
+                ),
+                success: false,
+              };
+            }
+          }),
+        );
+        for (const { toolCall, result, success } of toolResults) {
+          if (success) {
+            hadToolSuccess = true;
+          } else {
+            hadToolFailure = true;
           }
           requestMessages.push({
             role: 'tool',
-            content: toolResult,
+            content: result,
             tool_name: toolCall.function.name,
           });
         }
         continue;
       }
 
-      assistantText = responseMessage.content.trim();
+      const rawAssistantText = responseMessage.content.trim();
+      assistantText = sanitizeAssistantContent(rawAssistantText);
+      if (!assistantText && /<agent-browser\b/i.test(rawAssistantText)) {
+        assistantText = ASSISTANT_BROWSER_FALLBACK_MESSAGE;
+      }
       break;
     }
 
@@ -743,11 +846,17 @@ export async function runDirectOllamaAgent(
       throw new Error('Ollama returned no assistant content');
     }
 
-    saveSessionMessages(group.folder, sessionId, [
-      ...history,
-      userMessage,
-      { role: 'assistant', content: assistantText },
-    ]);
+    // Do not persist tool-failure apology responses to session history.
+    // If every tool call failed (and none succeeded), the assistant reply is
+    // just an error apology that would poison future sessions.
+    const shouldPersist = !hadToolFailure || hadToolSuccess;
+    if (shouldPersist) {
+      saveSessionMessages(group.folder, sessionId, [
+        ...history,
+        userMessage,
+        { role: 'assistant', content: assistantText },
+      ]);
+    }
 
     const output: ContainerOutput = {
       status: 'success',

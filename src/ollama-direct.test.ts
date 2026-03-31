@@ -134,6 +134,9 @@ describe('runDirectOllamaAgent', () => {
     expect(body.stream).toBe(false);
     expect(body.messages[0].role).toBe('system');
     expect(body.messages[0].content).toContain('Andy');
+    expect(body.messages[0].content).toContain(
+      'If the user sends literal <agent-browser ...> tags',
+    );
     expect(body.messages.at(-1)).toEqual({
       role: 'user',
       content: '<messages><message sender="YangKai">你好</message></messages>',
@@ -207,6 +210,127 @@ describe('runDirectOllamaAgent', () => {
       { role: 'assistant', content: '第一句回复' },
       { role: 'user', content: '第二句' },
     ]);
+  });
+
+  it('sanitizes poisoned assistant history before reuse', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          message: { role: 'assistant', content: '继续说。' },
+        }),
+    } as Response);
+
+    const sessionDir = path.join(
+      mockedPaths.dataDir,
+      'sessions',
+      'main',
+      'ollama-direct',
+    );
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionDir, 'session-poisoned.json'),
+      JSON.stringify({
+        messages: [
+          { role: 'user', content: '看一下 Hacker News' },
+          {
+            role: 'assistant',
+            content:
+              '我理解你的需求。\n<agent-browser open="https://news.ycombinator.com" />\n<agent-browser snapshot -i />\n<internal>正在查看页面</internal>',
+          },
+        ],
+      }),
+    );
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    await runDirectOllamaAgent(group, {
+      prompt: '继续',
+      sessionId: 'session-poisoned',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(String(init?.body));
+    expect(body.messages).toContainEqual({
+      role: 'assistant',
+      content: '我理解你的需求。',
+    });
+    const assistantHistory = body.messages
+      .filter((message: { role: string }) => message.role === 'assistant')
+      .map((message: { content: string }) => message.content)
+      .join('\n');
+    expect(assistantHistory).not.toContain('<agent-browser');
+    expect(assistantHistory).not.toContain('<internal>');
+  });
+
+  it('drops unresolved turns when poisoned assistant history sanitizes to empty', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          message: { role: 'assistant', content: '新的回复。' },
+        }),
+    } as Response);
+
+    const sessionDir = path.join(
+      mockedPaths.dataDir,
+      'sessions',
+      'main',
+      'ollama-direct',
+    );
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionDir, 'session-drop-empty.json'),
+      JSON.stringify({
+        messages: [
+          { role: 'user', content: '先前的问题' },
+          {
+            role: 'assistant',
+            content:
+              '<agent-browser open="https://news.ycombinator.com" />\n<internal>正在查看页面</internal>',
+          },
+          { role: 'user', content: '现在的问题' },
+        ],
+      }),
+    );
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    await runDirectOllamaAgent(group, {
+      prompt: '继续',
+      sessionId: 'session-drop-empty',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(String(init?.body));
+    expect(body.messages).not.toContainEqual({
+      role: 'user',
+      content: '先前的问题',
+    });
+    expect(body.messages).toContainEqual({
+      role: 'user',
+      content: '现在的问题',
+    });
   });
 
   it('executes tool calls before returning final content', async () => {
@@ -567,6 +691,148 @@ describe('runDirectOllamaAgent', () => {
           message.role === 'tool' && message.tool_name === 'browser_snapshot',
       ),
     ).toBe(true);
+  });
+
+  it('strips literal browser tags from final assistant output', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          message: {
+            role: 'assistant',
+            content:
+              '我理解你的需求。让我重新尝试获取：\n\n<agent-browser open="https://news.ycombinator.com" />\n<agent-browser snapshot -i />\n<internal>正在查看页面</internal>',
+          },
+        }),
+    } as Response);
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: '看一下 Hacker News',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    expect(result.result).toBe('我理解你的需求。让我重新尝试获取：');
+
+    const sessionPath = path.join(
+      mockedPaths.dataDir,
+      'sessions',
+      'main',
+      'ollama-direct',
+      `${result.newSessionId}.json`,
+    );
+    const saved = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
+    expect(saved.messages.at(-1)).toEqual({
+      role: 'assistant',
+      content: '我理解你的需求。让我重新尝试获取：',
+    });
+  });
+
+  it('strips inline literal browser tags from final assistant output', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          message: {
+            role: 'assistant',
+            content:
+              '我会用 <agent-browser open="https://news.ycombinator.com" /> 来查看首页。',
+          },
+        }),
+    } as Response);
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: '看一下 Hacker News',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    expect(result.result).toBe('我会用 来查看首页。');
+  });
+
+  it('falls back when assistant content sanitizes to empty', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          message: {
+            role: 'assistant',
+            content:
+              '<agent-browser open="https://news.ycombinator.com" />\n<agent-browser snapshot -i />\n<internal>正在查看页面</internal>',
+          },
+        }),
+    } as Response);
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: '看一下 Hacker News',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    expect(result.result).toBe(
+      "I couldn't complete that browser request. The browser tool did not return usable page content.",
+    );
+  });
+
+  it('still throws when internal-only content sanitizes to empty', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          message: {
+            role: 'assistant',
+            content: '<internal>仅有内部推理</internal>',
+          },
+        }),
+    } as Response);
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    await expect(
+      runDirectOllamaAgent(group, {
+        prompt: '你好',
+        chatJid: 'wecom:YangKai',
+        groupFolder: 'main',
+        isMain: true,
+      }),
+    ).rejects.toThrow('Ollama returned no assistant content');
   });
 
   it('closes browser sidecars after scheduled tasks', async () => {
