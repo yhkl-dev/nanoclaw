@@ -8,7 +8,9 @@ const mockedPaths = vi.hoisted(() => {
   const fs = require('node:fs') as typeof import('fs');
   const os = require('node:os') as typeof import('os');
   const path = require('node:path') as typeof import('path');
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-ollama-direct-'));
+  const tmpRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'nanoclaw-ollama-direct-'),
+  );
   return {
     tmpRoot,
     dataDir: path.join(tmpRoot, 'data'),
@@ -16,12 +18,23 @@ const mockedPaths = vi.hoisted(() => {
   };
 });
 
+const mockedConfigFlags = vi.hoisted(() => ({
+  ollamaEnableHostScripts: false,
+  ollamaHttpAllowPrivate: false,
+}));
+
 vi.mock('./config.js', () => ({
   ASSISTANT_NAME: 'Andy',
   CONTAINER_TIMEOUT: 30_000,
   DATA_DIR: mockedPaths.dataDir,
   GROUPS_DIR: mockedPaths.groupsDir,
+  get OLLAMA_ENABLE_HOST_SCRIPTS() {
+    return mockedConfigFlags.ollamaEnableHostScripts;
+  },
   OLLAMA_HOST: 'http://192.168.2.19:11434',
+  get OLLAMA_HTTP_ALLOW_PRIVATE() {
+    return mockedConfigFlags.ollamaHttpAllowPrivate;
+  },
   OLLAMA_MODEL: 'qwen3-coder:30b',
 }));
 
@@ -32,6 +45,16 @@ vi.mock('./logger.js', () => ({
     warn: vi.fn(),
     error: vi.fn(),
   },
+}));
+
+const mockExecFile = vi.fn();
+vi.mock('child_process', () => ({
+  execFile: (...args: unknown[]) => mockExecFile(...args),
+}));
+
+const mockLookup = vi.fn();
+vi.mock('dns/promises', () => ({
+  lookup: (...args: unknown[]) => mockLookup(...args),
 }));
 
 import { runDirectOllamaAgent } from './ollama-direct.js';
@@ -46,6 +69,9 @@ describe('runDirectOllamaAgent', () => {
       'You are helping from the main group.',
     );
     vi.stubGlobal('fetch', vi.fn());
+    mockedConfigFlags.ollamaEnableHostScripts = false;
+    mockedConfigFlags.ollamaHttpAllowPrivate = false;
+    mockLookup.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
   });
 
   afterEach(() => {
@@ -114,7 +140,8 @@ describe('runDirectOllamaAgent', () => {
     expect(saved.messages).toEqual([
       {
         role: 'user',
-        content: '<messages><message sender="YangKai">你好</message></messages>',
+        content:
+          '<messages><message sender="YangKai">你好</message></messages>',
       },
       { role: 'assistant', content: '你好，我在。' },
     ]);
@@ -172,7 +199,179 @@ describe('runDirectOllamaAgent', () => {
     ]);
   });
 
-  it('rejects scheduled task scripts explicitly', async () => {
+  it('executes tool calls before returning final content', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [
+                {
+                  function: {
+                    name: 'http_request',
+                    arguments: { url: 'https://example.com', method: 'GET' },
+                  },
+                },
+              ],
+            },
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        url: 'https://example.com/',
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'text/html' }),
+        text: async () => '<html><title>Example Domain</title></html>',
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: { role: 'assistant', content: 'Example Domain' },
+          }),
+      } as Response);
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: 'Fetch https://example.com and summarize it',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    expect(result.result).toBe('Example Domain');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(firstBody.tools?.[0]?.function?.name).toBe('http_request');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe('https://example.com/');
+    const secondChatBody = JSON.parse(
+      String(fetchMock.mock.calls[2]?.[1]?.body),
+    );
+    expect(
+      secondChatBody.messages.some(
+        (message: { role: string; tool_name?: string }) =>
+          message.role === 'tool' && message.tool_name === 'http_request',
+      ),
+    ).toBe(true);
+  });
+
+  it('blocks localhost HTTP tool targets by default', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [
+                {
+                  function: {
+                    name: 'http_request',
+                    arguments: { url: 'http://localhost:11434/api/tags' },
+                  },
+                },
+              ],
+            },
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: {
+              role: 'assistant',
+              content: 'blocked as expected',
+            },
+          }),
+      } as Response);
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: 'Try to call localhost',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    expect(result.result).toBe('blocked as expected');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks redirects from public URLs to localhost', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [
+                {
+                  function: {
+                    name: 'http_request',
+                    arguments: { url: 'https://example.com/redirect' },
+                  },
+                },
+              ],
+            },
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: new Headers({ location: 'http://localhost:11434/api/tags' }),
+        text: async () => '',
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: { role: 'assistant', content: 'redirect blocked' },
+          }),
+      } as Response);
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: 'Try the redirect',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    expect(result.result).toBe('redirect blocked');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects scheduled task scripts unless explicitly enabled', async () => {
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
@@ -190,9 +389,127 @@ describe('runDirectOllamaAgent', () => {
         isScheduledTask: true,
         script: 'echo hello',
       }),
-    ).rejects.toThrow(
-      'MODEL_BACKEND=ollama does not support scheduled task scripts',
+    ).rejects.toThrow('OLLAMA_ENABLE_HOST_SCRIPTS=true');
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it('returns success with no output when scheduled script says wakeAgent=false', async () => {
+    mockedConfigFlags.ollamaEnableHostScripts = true;
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    mockExecFile.mockImplementationOnce(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        cb(null, '{"wakeAgent":false}\n', '');
+      },
     );
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: 'task prompt',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+      isScheduledTask: true,
+      script: 'echo hello',
+    });
+
+    expect(result).toEqual({
+      status: 'success',
+      result: null,
+      newSessionId: undefined,
+    });
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('runs scheduled task script data through Ollama when wakeAgent=true', async () => {
+    mockedConfigFlags.ollamaEnableHostScripts = true;
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    mockExecFile.mockImplementationOnce(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        cb(null, '{"wakeAgent":true,"data":{"city":"Shanghai"}}\n', '');
+      },
+    );
+
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          message: { role: 'assistant', content: 'script ok' },
+        }),
+    } as Response);
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: 'Summarize the task output',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+      isScheduledTask: true,
+      script: 'echo hello',
+    });
+
+    expect(result.result).toBe('script ok');
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.messages.at(-1)?.content).toContain('"city": "Shanghai"');
+    expect(body.messages.at(-1)?.content).toContain('Summarize the task output');
+  });
+
+  it('surfaces scheduled task script failures', async () => {
+    mockedConfigFlags.ollamaEnableHostScripts = true;
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    mockExecFile.mockImplementationOnce(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        cb(null, 'not-json\n', '');
+      },
+    );
+
+    await expect(
+      runDirectOllamaAgent(group, {
+        prompt: 'task prompt',
+        chatJid: 'wecom:YangKai',
+        groupFolder: 'main',
+        isMain: true,
+        isScheduledTask: true,
+        script: 'echo hello',
+      }),
+    ).rejects.toThrow('Task script output is not valid JSON');
   });
 
   it('rejects unsafe session ids', async () => {
@@ -213,5 +530,24 @@ describe('runDirectOllamaAgent', () => {
         isMain: true,
       }),
     ).rejects.toThrow('Invalid Ollama session id');
+  });
+
+  it('rejects mismatched group folders', async () => {
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    await expect(
+      runDirectOllamaAgent(group, {
+        prompt: 'task prompt',
+        chatJid: 'wecom:YangKai',
+        groupFolder: 'other',
+        isMain: true,
+      }),
+    ).rejects.toThrow('Direct Ollama group mismatch');
   });
 });

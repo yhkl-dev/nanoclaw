@@ -12,7 +12,9 @@ const envConfig = readEnvFile([
   'CREDENTIAL_PROXY_PORT',
   'MODEL_BACKEND',
   'OLLAMA_ADMIN_TOOLS',
+  'OLLAMA_ENABLE_HOST_SCRIPTS',
   'OLLAMA_HOST',
+  'OLLAMA_HTTP_ALLOW_PRIVATE',
   'OLLAMA_MODEL',
   'TZ',
   'WECOM_BOT_ID',
@@ -31,9 +33,14 @@ export const MODEL_BACKEND =
   process.env.MODEL_BACKEND || envConfig.MODEL_BACKEND || 'claude';
 export const OLLAMA_ADMIN_TOOLS =
   (process.env.OLLAMA_ADMIN_TOOLS || envConfig.OLLAMA_ADMIN_TOOLS) === 'true';
+export const OLLAMA_ENABLE_HOST_SCRIPTS =
+  (process.env.OLLAMA_ENABLE_HOST_SCRIPTS ||
+    envConfig.OLLAMA_ENABLE_HOST_SCRIPTS) === 'true';
 export const OLLAMA_HOST = process.env.OLLAMA_HOST || envConfig.OLLAMA_HOST;
-export const OLLAMA_MODEL =
-  process.env.OLLAMA_MODEL || envConfig.OLLAMA_MODEL;
+export const OLLAMA_HTTP_ALLOW_PRIVATE =
+  (process.env.OLLAMA_HTTP_ALLOW_PRIVATE ||
+    envConfig.OLLAMA_HTTP_ALLOW_PRIVATE) === 'true';
+export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || envConfig.OLLAMA_MODEL;
 export const WECOM_BOT_ID = process.env.WECOM_BOT_ID || envConfig.WECOM_BOT_ID;
 export const WECOM_BOT_SECRET =
   process.env.WECOM_BOT_SECRET || envConfig.WECOM_BOT_SECRET;
@@ -73,7 +80,9 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
   10,
 ); // 10MB default
 export const CREDENTIAL_PROXY_PORT = parseInt(
-  process.env.CREDENTIAL_PROXY_PORT || envConfig.CREDENTIAL_PROXY_PORT || '3001',
+  process.env.CREDENTIAL_PROXY_PORT ||
+    envConfig.CREDENTIAL_PROXY_PORT ||
+    '3001',
   10,
 );
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
