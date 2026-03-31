@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y \
     fonts-liberation \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
+    iptables \
+    iproute2 \
     libgbm1 \
     libnss3 \
     libatk-bridge2.0-0 \

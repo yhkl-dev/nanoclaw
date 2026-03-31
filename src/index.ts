@@ -521,6 +521,7 @@ function recoverPendingMessages(): void {
 function ensureContainerSystemRunning(): void {
   if (MODEL_BACKEND === 'ollama') {
     logger.info('MODEL_BACKEND=ollama, skipping container runtime startup');
+    cleanupOrphans();
     return;
   }
   ensureContainerRuntimeRunning();

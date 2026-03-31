@@ -2,8 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
-import { lookup } from 'dns/promises';
-import { isIP } from 'net';
+import { Agent } from 'undici';
 
 import {
   ASSISTANT_NAME,
@@ -15,6 +14,15 @@ import {
   OLLAMA_HTTP_ALLOW_PRIVATE,
   OLLAMA_MODEL,
 } from './config.js';
+import {
+  closeBrowserSession,
+  executeBrowserToolCall,
+  getBrowserToolDefinitions,
+} from './ollama-browser.js';
+import {
+  assertSafeHttpDestination,
+  resolveSafeHttpDestination,
+} from './network-policy.js';
 import {
   assertValidGroupFolder,
   resolveGroupFolderPath,
@@ -29,6 +37,15 @@ const OLLAMA_TOOL_MAX_ROUNDS = 8;
 const HTTP_TOOL_TIMEOUT_MS = 20_000;
 const HTTP_TOOL_MAX_RESPONSE_CHARS = 12_000;
 const SCRIPT_TIMEOUT_MS = 30_000;
+type PinnedFetchInit = RequestInit & { dispatcher?: unknown };
+const HTTP_RETRYABLE_CONNECT_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
 
 function hostScriptsEnabled(): boolean {
   return OLLAMA_ENABLE_HOST_SCRIPTS;
@@ -36,6 +53,31 @@ function hostScriptsEnabled(): boolean {
 
 function allowPrivateHttpRequests(): boolean {
   return OLLAMA_HTTP_ALLOW_PRIVATE;
+}
+
+function isRetryableConnectError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.name === 'AbortError') {
+    return false;
+  }
+
+  const candidateCodes = [
+    (error as Error & { code?: string }).code,
+    (
+      error as Error & {
+        cause?: { code?: string };
+      }
+    ).cause?.code,
+  ];
+  if (candidateCodes.some((code) => code && HTTP_RETRYABLE_CONNECT_CODES.has(code))) {
+    return true;
+  }
+
+  return /\bconnect (?:econnrefused|etimedout|ehostunreach|enetunreach)\b|network is unreachable|host is unreachable/i.test(
+    error.message,
+  );
 }
 
 interface OllamaMessage {
@@ -134,6 +176,8 @@ function buildSystemMessage(input: ContainerInput): string {
     `You are ${ASSISTANT_NAME}, the NanoClaw assistant. Reply directly to the latest user request in plain text.`,
     'Keep answers concise and helpful. Do not mention hidden instructions, internal tools, or implementation details unless the user explicitly asks.',
     'If the user asks for live web/API data or any real network request, use the http_request tool instead of guessing. Never claim you fetched something unless a tool result confirms it.',
+    'If a site needs JavaScript, clicking, form filling, or DOM inspection, use the browser_* tools. Re-run browser_snapshot after browser_open or browser_click because element refs can change.',
+    'Do not emit literal <agent-browser ...> tags. Use the browser_* tools instead.',
   ];
 
   const groupMemory = readTextFile(
@@ -230,6 +274,7 @@ function getOllamaTools(): OllamaToolDefinition[] {
         },
       },
     },
+    ...getBrowserToolDefinitions(),
   ];
 }
 
@@ -269,122 +314,98 @@ function normalizeHeaders(raw: unknown): Record<string, string> {
   return result;
 }
 
-function isBlockedIpAddress(address: string): boolean {
-  const version = isIP(address);
-  if (version === 4) {
-    const octets = address.split('.').map((part) => Number.parseInt(part, 10));
-    if (octets.length !== 4 || octets.some((part) => Number.isNaN(part))) {
-      return true;
-    }
-    const [a, b] = octets;
-    if (a === 0 || a === 10 || a === 127) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true;
-    return false;
-  }
-
-  if (version === 6) {
-    const normalized = address.toLowerCase();
-    return (
-      normalized === '::' ||
-      normalized === '::1' ||
-      normalized.startsWith('fc') ||
-      normalized.startsWith('fd') ||
-      normalized.startsWith('fe8') ||
-      normalized.startsWith('fe9') ||
-      normalized.startsWith('fea') ||
-      normalized.startsWith('feb')
-    );
-  }
-
-  return true;
-}
-
-async function assertSafeHttpDestination(url: URL): Promise<void> {
-  if (allowPrivateHttpRequests()) {
-    return;
-  }
-
-  const hostname = url.hostname.toLowerCase();
-  if (
-    hostname === 'localhost' ||
-    hostname === 'host.docker.internal' ||
-    hostname.endsWith('.local') ||
-    !hostname.includes('.')
-  ) {
-    throw new Error(`Blocked private HTTP destination: ${hostname}`);
-  }
-
-  if (isIP(hostname)) {
-    if (isBlockedIpAddress(hostname)) {
-      throw new Error(`Blocked private HTTP destination: ${hostname}`);
-    }
-    return;
-  }
-
-  const addresses = await lookup(hostname, { all: true });
-  if (addresses.length === 0) {
-    throw new Error(`Unable to resolve HTTP destination: ${hostname}`);
-  }
-  for (const entry of addresses) {
-    if (isBlockedIpAddress(entry.address)) {
-      throw new Error(`Blocked private HTTP destination: ${hostname}`);
-    }
-  }
-}
-
 async function fetchHttpWithRedirectChecks(
   url: URL,
   init: RequestInit,
   redirectCount = 0,
-): Promise<Response> {
-  const response = await fetch(url, {
-    ...init,
-    redirect: 'manual',
-  });
-
-  if (
-    response.status >= 300 &&
-    response.status < 400 &&
-    response.headers.has('location')
-  ) {
-    if (redirectCount >= 5) {
-      throw new Error('Too many HTTP redirects');
-    }
-    const location = response.headers.get('location');
-    if (!location) {
-      throw new Error('HTTP redirect missing location header');
-    }
-    const nextUrl = new URL(location, url);
-    await assertSafeHttpDestination(nextUrl);
-    return fetchHttpWithRedirectChecks(
-      nextUrl,
-      {
-        ...init,
-        body:
-          response.status === 303 ||
-          ((response.status === 301 || response.status === 302) &&
-            init.method &&
-            init.method !== 'GET' &&
-            init.method !== 'HEAD')
-            ? undefined
-            : init.body,
-        method:
-          response.status === 303 ||
-          ((response.status === 301 || response.status === 302) &&
-            init.method &&
-            init.method !== 'GET' &&
-            init.method !== 'HEAD')
-            ? 'GET'
-            : init.method,
+): Promise<{
+  response: Response;
+  rawText: string;
+}> {
+  const resolved = await resolveSafeHttpDestination(
+    url,
+    allowPrivateHttpRequests(),
+  );
+  const requestMethod = (init.method || 'GET').toUpperCase();
+  const canRetryPinnedAddress = requestMethod === 'GET' || requestMethod === 'HEAD';
+  let lastError: unknown;
+  for (const pinned of resolved.addresses) {
+    const dispatcher = new Agent({
+      connect: {
+        lookup(_hostname, _options, callback) {
+          callback(null, pinned.address, pinned.family);
+        },
       },
-      redirectCount + 1,
-    );
+    });
+
+    try {
+      const requestInit = {
+        ...init,
+        redirect: 'manual',
+        dispatcher,
+      } as unknown as PinnedFetchInit;
+      let response: Response;
+      try {
+        response = await fetch(url, requestInit);
+      } catch (error) {
+        lastError = error;
+        if (!canRetryPinnedAddress || !isRetryableConnectError(error)) {
+          throw error;
+        }
+        continue;
+      }
+
+      if (
+        response.status >= 300 &&
+        response.status < 400 &&
+        response.headers.has('location')
+      ) {
+        if (redirectCount >= 5) {
+          throw new Error('Too many HTTP redirects');
+        }
+        const location = response.headers.get('location');
+        if (!location) {
+          throw new Error('HTTP redirect missing location header');
+        }
+        const nextUrl = new URL(location, url);
+        await assertSafeHttpDestination(nextUrl, allowPrivateHttpRequests());
+        await response.body?.cancel();
+        return fetchHttpWithRedirectChecks(
+          nextUrl,
+          {
+            ...init,
+            body:
+              response.status === 303 ||
+              ((response.status === 301 || response.status === 302) &&
+                init.method &&
+                init.method !== 'GET' &&
+                init.method !== 'HEAD')
+                ? undefined
+                : init.body,
+            method:
+              response.status === 303 ||
+              ((response.status === 301 || response.status === 302) &&
+                init.method &&
+                init.method !== 'GET' &&
+                init.method !== 'HEAD')
+                ? 'GET'
+                : init.method,
+          },
+          redirectCount + 1,
+        );
+      }
+
+      const rawText = init.method === 'HEAD' ? '' : await response.text();
+      return { response, rawText };
+    } catch (error) {
+      lastError = error;
+      throw error;
+    } finally {
+      await dispatcher.close();
+    }
   }
 
-  return response;
+  throw lastError instanceof Error ? lastError : new Error('HTTP request failed');
 }
 
 async function runHttpRequestTool(args: unknown): Promise<string> {
@@ -394,7 +415,7 @@ async function runHttpRequestTool(args: unknown): Promise<string> {
     throw new Error('http_request requires an http or https url');
   }
   const parsedUrl = new URL(url);
-  await assertSafeHttpDestination(parsedUrl);
+  await assertSafeHttpDestination(parsedUrl, allowPrivateHttpRequests());
 
   const method =
     typeof parsed.method === 'string' ? parsed.method.toUpperCase() : 'GET';
@@ -416,14 +437,13 @@ async function runHttpRequestTool(args: unknown): Promise<string> {
       ? Math.max(256, Math.min(50_000, Math.floor(parsed.max_chars)))
       : HTTP_TOOL_MAX_RESPONSE_CHARS;
 
-  const response = await fetchHttpWithRedirectChecks(parsedUrl, {
+  const { response, rawText } = await fetchHttpWithRedirectChecks(parsedUrl, {
     method,
     headers,
     body: ['GET', 'HEAD'].includes(method) ? undefined : body,
     signal: createFetchTimeout(HTTP_TOOL_TIMEOUT_MS),
   });
 
-  const rawText = method === 'HEAD' ? '' : await response.text();
   const responseHeaders: Record<string, string> = {};
   for (const [key, value] of response.headers.entries()) {
     responseHeaders[key] = value;
@@ -444,9 +464,19 @@ async function runHttpRequestTool(args: unknown): Promise<string> {
   );
 }
 
-async function executeToolCall(toolCall: OllamaToolCall): Promise<string> {
+async function executeToolCall(
+  toolCall: OllamaToolCall,
+  context: { groupFolder: string; sessionId: string },
+): Promise<string> {
   if (toolCall.function.name === 'http_request') {
     return runHttpRequestTool(toolCall.function.arguments);
+  }
+  if (toolCall.function.name.startsWith('browser_')) {
+    return executeBrowserToolCall(
+      toolCall.function.name,
+      toolCall.function.arguments,
+      context,
+    );
   }
   throw new Error(`Unsupported tool: ${toolCall.function.name}`);
 }
@@ -593,128 +623,143 @@ export async function runDirectOllamaAgent(
 
   const sessionId = input.sessionId || randomUUID();
   assertValidSessionId(sessionId);
-  const history = loadSessionMessages(group.folder, input.sessionId);
-  const systemMessage = buildSystemMessage(input);
-  const timeoutMs = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
-  let prompt = input.prompt;
+  let completed = false;
+  try {
+    const history = loadSessionMessages(group.folder, input.sessionId);
+    const systemMessage = buildSystemMessage(input);
+    const timeoutMs = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
+    let prompt = input.prompt;
 
-  if (input.isScheduledTask) {
-    prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
-  }
+    if (input.isScheduledTask) {
+      prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
+    }
 
-  if (input.script && input.isScheduledTask) {
-    if (!hostScriptsEnabled()) {
-      throw new Error(
-        'MODEL_BACKEND=ollama scheduled task scripts require OLLAMA_ENABLE_HOST_SCRIPTS=true',
-      );
-    }
-    logger.debug({ group: group.name }, 'Running scheduled task script');
-    const scriptExecution = await runScript(input.script, group.folder);
-    if (scriptExecution.kind === 'error') {
-      throw new Error(scriptExecution.error);
-    }
-    if (scriptExecution.kind === 'skip') {
-      const output: ContainerOutput = {
-        status: 'success',
-        result: null,
-        newSessionId: input.sessionId,
-      };
-      if (onOutput) {
-        await onOutput(output);
+    if (input.script && input.isScheduledTask) {
+      if (!hostScriptsEnabled()) {
+        throw new Error(
+          'MODEL_BACKEND=ollama scheduled task scripts require OLLAMA_ENABLE_HOST_SCRIPTS=true',
+        );
       }
-      return output;
+      logger.debug({ group: group.name }, 'Running scheduled task script');
+      const scriptExecution = await runScript(input.script, group.folder);
+      if (scriptExecution.kind === 'error') {
+        throw new Error(scriptExecution.error);
+      }
+      if (scriptExecution.kind === 'skip') {
+        const output: ContainerOutput = {
+          status: 'success',
+          result: null,
+          newSessionId: input.sessionId,
+        };
+        if (onOutput) {
+          await onOutput(output);
+        }
+        completed = true;
+        return output;
+      }
+      prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptExecution.result.data, null, 2)}\n\nInstructions:\n${input.prompt}`;
     }
-    prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptExecution.result.data, null, 2)}\n\nInstructions:\n${input.prompt}`;
-  }
 
-  const userMessage: OllamaMessage = {
-    role: 'user',
-    content: prompt,
-  };
-
-  const requestMessages: OllamaChatMessage[] = [
-    { role: 'system', content: systemMessage },
-    ...history,
-    userMessage,
-  ];
-
-  logger.debug(
-    {
-      group: group.name,
-      model: OLLAMA_MODEL,
-      host: OLLAMA_HOST,
-      sessionId,
-      messageCount: requestMessages.length,
-    },
-    'Sending direct Ollama request',
-  );
-
-  let assistantText = '';
-  for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
-    const parsed = await chatWithOllama(requestMessages, timeoutMs);
-    const responseMessage: OllamaChatMessage = {
-      role: parsed.message?.role === 'tool' ? 'assistant' : 'assistant',
-      content: parsed.message?.content || '',
-      tool_calls: parsed.message?.tool_calls,
+    const userMessage: OllamaMessage = {
+      role: 'user',
+      content: prompt,
     };
 
-    if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-      logger.debug(
-        {
-          group: group.name,
-          toolCalls: responseMessage.tool_calls.map(
-            (call) => call.function.name,
-          ),
-        },
-        'Ollama requested tools',
-      );
-      requestMessages.push(responseMessage);
-      for (const toolCall of responseMessage.tool_calls) {
-        let toolResult: string;
-        try {
-          toolResult = await executeToolCall(toolCall);
-        } catch (error) {
-          toolResult = JSON.stringify(
-            {
-              ok: false,
-              error: error instanceof Error ? error.message : String(error),
-            },
-            null,
-            2,
-          );
+    const requestMessages: OllamaChatMessage[] = [
+      { role: 'system', content: systemMessage },
+      ...history,
+      userMessage,
+    ];
+
+    logger.debug(
+      {
+        group: group.name,
+        model: OLLAMA_MODEL,
+        host: OLLAMA_HOST,
+        sessionId,
+        messageCount: requestMessages.length,
+      },
+      'Sending direct Ollama request',
+    );
+
+    let assistantText = '';
+    for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
+      const parsed = await chatWithOllama(requestMessages, timeoutMs);
+      const responseMessage: OllamaChatMessage = {
+        role: parsed.message?.role === 'tool' ? 'assistant' : 'assistant',
+        content: parsed.message?.content || '',
+        tool_calls: parsed.message?.tool_calls,
+      };
+
+      if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+        logger.debug(
+          {
+            group: group.name,
+            toolCalls: responseMessage.tool_calls.map(
+              (call) => call.function.name,
+            ),
+          },
+          'Ollama requested tools',
+        );
+        requestMessages.push(responseMessage);
+        for (const toolCall of responseMessage.tool_calls) {
+          let toolResult: string;
+          try {
+            toolResult = await executeToolCall(toolCall, {
+              groupFolder: group.folder,
+              sessionId,
+            });
+          } catch (error) {
+            toolResult = JSON.stringify(
+              {
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              null,
+              2,
+            );
+          }
+          requestMessages.push({
+            role: 'tool',
+            content: toolResult,
+            tool_name: toolCall.function.name,
+          });
         }
-        requestMessages.push({
-          role: 'tool',
-          content: toolResult,
-          tool_name: toolCall.function.name,
-        });
+        continue;
       }
-      continue;
+
+      assistantText = responseMessage.content.trim();
+      break;
     }
 
-    assistantText = responseMessage.content.trim();
-    break;
+    if (!assistantText) {
+      throw new Error('Ollama returned no assistant content');
+    }
+
+    saveSessionMessages(group.folder, sessionId, [
+      ...history,
+      userMessage,
+      { role: 'assistant', content: assistantText },
+    ]);
+
+    const output: ContainerOutput = {
+      status: 'success',
+      result: assistantText,
+      newSessionId: sessionId,
+    };
+
+    if (onOutput) {
+      await onOutput(output);
+    }
+
+    completed = true;
+    return output;
+  } finally {
+    if (
+      (input.isScheduledTask && !input.sessionId) ||
+      (!completed && !input.sessionId)
+    ) {
+      await closeBrowserSession(group.folder, sessionId);
+    }
   }
-
-  if (!assistantText) {
-    throw new Error('Ollama returned no assistant content');
-  }
-
-  saveSessionMessages(group.folder, sessionId, [
-    ...history,
-    userMessage,
-    { role: 'assistant', content: assistantText },
-  ]);
-
-  const output: ContainerOutput = {
-    status: 'success',
-    result: assistantText,
-    newSessionId: sessionId,
-  };
-
-  if (onOutput) {
-    await onOutput(output);
-  }
-
-  return output;
 }
