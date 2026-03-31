@@ -306,7 +306,9 @@ describe('runDirectOllamaAgent', () => {
           }),
       } as Response)
       .mockRejectedValueOnce(
-        Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+        Object.assign(new Error('connect ECONNREFUSED'), {
+          code: 'ECONNREFUSED',
+        }),
       )
       .mockResolvedValueOnce({
         ok: true,

@@ -70,7 +70,9 @@ describe('credential-proxy', () => {
 
   afterEach(async () => {
     await new Promise<void>((resolve) => proxyServer?.close(() => resolve()));
-    await new Promise<void>((resolve) => upstreamServer?.close(() => resolve()));
+    await new Promise<void>((resolve) =>
+      upstreamServer?.close(() => resolve()),
+    );
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
   });
 

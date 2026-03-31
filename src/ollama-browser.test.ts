@@ -81,11 +81,19 @@ describe('ollama browser tools', () => {
           return cb(null, 'true\n', '');
         }
         if (args[0] === 'run') return cb(null, 'container-id\n', '');
-        if (args[0] === 'exec' && args.at(-1) === 'test -f /tmp/nanoclaw-browser-ready') {
+        if (
+          args[0] === 'exec' &&
+          args.at(-1) === 'test -f /tmp/nanoclaw-browser-ready'
+        ) {
           return cb(null, '', '');
         }
-        if (args[0] === 'exec' && args.at(-2) === 'open') return cb(null, '', '');
-        if (args[0] === 'exec' && args.at(-2) === 'get' && args.at(-1) === 'url') {
+        if (args[0] === 'exec' && args.at(-2) === 'open')
+          return cb(null, '', '');
+        if (
+          args[0] === 'exec' &&
+          args.at(-2) === 'get' &&
+          args.at(-1) === 'url'
+        ) {
           return cb(null, 'https://example.com/\n', '');
         }
         if (
@@ -120,7 +128,9 @@ describe('ollama browser tools', () => {
     expect(mockExecFile).toHaveBeenCalledWith(
       'docker',
       expect.arrayContaining([
-        expect.stringContaining('ip6tables -A OUTPUT -d ::ffff:0:0/96 -j REJECT'),
+        expect.stringContaining(
+          'ip6tables -A OUTPUT -d ::ffff:0:0/96 -j REJECT',
+        ),
       ]),
       expect.any(Object),
       expect.any(Function),
@@ -150,16 +160,20 @@ describe('ollama browser tools', () => {
           stdout?: string | Buffer,
           stderr?: string | Buffer,
         ) => void,
-        ) => {
-          if (args[0] === 'inspect') return cb(null, 'true\n', '');
-          if (args[0] === 'exec' && args.at(-2) === 'get' && args.at(-1) === 'url') {
-            return cb(null, 'https://example.com/\n', '');
-          }
-          if (args[0] === 'exec' && args.at(-1) === '-c') {
-            return cb(null, '- heading "Example Domain" [ref=e1]\n', '');
-          }
-          return cb(new Error(`unexpected exec: ${args.join(' ')}`));
-        },
+      ) => {
+        if (args[0] === 'inspect') return cb(null, 'true\n', '');
+        if (
+          args[0] === 'exec' &&
+          args.at(-2) === 'get' &&
+          args.at(-1) === 'url'
+        ) {
+          return cb(null, 'https://example.com/\n', '');
+        }
+        if (args[0] === 'exec' && args.at(-1) === '-c') {
+          return cb(null, '- heading "Example Domain" [ref=e1]\n', '');
+        }
+        return cb(new Error(`unexpected exec: ${args.join(' ')}`));
+      },
     );
 
     const result = await executeBrowserToolCall(
@@ -201,11 +215,19 @@ describe('ollama browser tools', () => {
           return cb(null, 'true\n', '');
         }
         if (args[0] === 'run') return cb(null, 'container-id\n', '');
-        if (args[0] === 'exec' && args.at(-1) === 'test -f /tmp/nanoclaw-browser-ready') {
+        if (
+          args[0] === 'exec' &&
+          args.at(-1) === 'test -f /tmp/nanoclaw-browser-ready'
+        ) {
           return cb(null, '', '');
         }
-        if (args[0] === 'exec' && args.at(-2) === 'open') return cb(null, '', '');
-        if (args[0] === 'exec' && args.at(-2) === 'get' && args.at(-1) === 'url') {
+        if (args[0] === 'exec' && args.at(-2) === 'open')
+          return cb(null, '', '');
+        if (
+          args[0] === 'exec' &&
+          args.at(-2) === 'get' &&
+          args.at(-1) === 'url'
+        ) {
           return cb(null, 'http://localhost:3000/\n', '');
         }
         return cb(new Error(`unexpected exec: ${args.join(' ')}`));
@@ -237,8 +259,13 @@ describe('ollama browser tools', () => {
         ) => void,
       ) => {
         if (args[0] === 'inspect') return cb(null, 'true\n', '');
-        if (args[0] === 'exec' && args.at(-3) === 'fill') return cb(null, '', '');
-        if (args[0] === 'exec' && args.at(-2) === 'get' && args.at(-1) === 'url') {
+        if (args[0] === 'exec' && args.at(-3) === 'fill')
+          return cb(null, '', '');
+        if (
+          args[0] === 'exec' &&
+          args.at(-2) === 'get' &&
+          args.at(-1) === 'url'
+        ) {
           return cb(null, 'http://localhost:3000/\n', '');
         }
         return cb(new Error(`unexpected exec: ${args.join(' ')}`));
@@ -301,7 +328,11 @@ describe('ollama browser tools', () => {
         if (args[0] === 'exec' && args.at(-2) === 'open') {
           return cb(null, '', '');
         }
-        if (args[0] === 'exec' && args.at(-2) === 'get' && args.at(-1) === 'url') {
+        if (
+          args[0] === 'exec' &&
+          args.at(-2) === 'get' &&
+          args.at(-1) === 'url'
+        ) {
           return cb(null, 'https://example.com/\n', '');
         }
         if (

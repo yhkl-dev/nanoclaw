@@ -71,7 +71,11 @@ function isRetryableConnectError(error: unknown): boolean {
       }
     ).cause?.code,
   ];
-  if (candidateCodes.some((code) => code && HTTP_RETRYABLE_CONNECT_CODES.has(code))) {
+  if (
+    candidateCodes.some(
+      (code) => code && HTTP_RETRYABLE_CONNECT_CODES.has(code),
+    )
+  ) {
     return true;
   }
 
@@ -327,7 +331,8 @@ async function fetchHttpWithRedirectChecks(
     allowPrivateHttpRequests(),
   );
   const requestMethod = (init.method || 'GET').toUpperCase();
-  const canRetryPinnedAddress = requestMethod === 'GET' || requestMethod === 'HEAD';
+  const canRetryPinnedAddress =
+    requestMethod === 'GET' || requestMethod === 'HEAD';
   let lastError: unknown;
   for (const pinned of resolved.addresses) {
     const dispatcher = new Agent({
@@ -405,7 +410,9 @@ async function fetchHttpWithRedirectChecks(
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error('HTTP request failed');
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('HTTP request failed');
 }
 
 async function runHttpRequestTool(args: unknown): Promise<string> {

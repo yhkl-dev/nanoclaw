@@ -24,7 +24,10 @@ describe('assertSafeHttpDestination', () => {
     ).rejects.toThrow('Blocked private HTTP destination');
 
     await expect(
-      assertSafeHttpDestination(new URL('http://[::ffff:192.168.1.10]/'), false),
+      assertSafeHttpDestination(
+        new URL('http://[::ffff:192.168.1.10]/'),
+        false,
+      ),
     ).rejects.toThrow('Blocked private HTTP destination');
   });
 });

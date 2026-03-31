@@ -76,7 +76,10 @@ export function startCredentialProxy(
         );
 
         upstream.on('error', (err) => {
-          logger.error({ err, url: req.url }, 'Credential proxy upstream error');
+          logger.error(
+            { err, url: req.url },
+            'Credential proxy upstream error',
+          );
           if (!res.headersSent) {
             res.writeHead(502);
             res.end('Bad Gateway');

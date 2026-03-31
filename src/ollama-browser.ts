@@ -84,7 +84,10 @@ async function dockerExec(args: string[]): Promise<string> {
       },
       (error, stdout, stderr) => {
         if (stderr) {
-          logger.debug({ stderr: truncate(String(stderr)) }, 'Browser docker stderr');
+          logger.debug(
+            { stderr: truncate(String(stderr)) },
+            'Browser docker stderr',
+          );
         }
         if (error) {
           reject(error);
@@ -96,7 +99,9 @@ async function dockerExec(args: string[]): Promise<string> {
   });
 }
 
-async function inspectContainerRunning(containerName: string): Promise<boolean> {
+async function inspectContainerRunning(
+  containerName: string,
+): Promise<boolean> {
   try {
     const output = await dockerExec([
       'inspect',
@@ -130,11 +135,15 @@ function buildBrowserContainerCommand(): string {
   return lines.join('; ');
 }
 
-async function waitForBrowserContainerReady(containerName: string): Promise<void> {
+async function waitForBrowserContainerReady(
+  containerName: string,
+): Promise<void> {
   const deadline = Date.now() + BROWSER_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (!(await inspectContainerRunning(containerName))) {
-      throw new Error(`Browser sidecar exited before becoming ready: ${containerName}`);
+      throw new Error(
+        `Browser sidecar exited before becoming ready: ${containerName}`,
+      );
     }
     try {
       await dockerExec([
@@ -176,7 +185,9 @@ async function ensureBrowserContainer(
     '--rm',
     '--name',
     containerName,
-    ...(OLLAMA_HTTP_ALLOW_PRIVATE ? [] : ['--cap-add=NET_ADMIN', '--user', 'root']),
+    ...(OLLAMA_HTTP_ALLOW_PRIVATE
+      ? []
+      : ['--cap-add=NET_ADMIN', '--user', 'root']),
     ...hostGatewayArgs(),
     '--entrypoint',
     'sh',
@@ -210,7 +221,10 @@ async function getCurrentBrowserUrl(
   groupFolder: string,
   sessionId: string,
 ): Promise<string> {
-  const output = await runBrowserCommand(groupFolder, sessionId, ['get', 'url']);
+  const output = await runBrowserCommand(groupFolder, sessionId, [
+    'get',
+    'url',
+  ]);
   return output.trim();
 }
 
@@ -264,7 +278,10 @@ async function handleBrowserOpen(
   const args = parseObjectArgs(rawArgs);
   const url = new URL(requireString(args, 'url'));
   await assertSafeHttpDestination(url, OLLAMA_HTTP_ALLOW_PRIVATE);
-  await runBrowserCommand(ctx.groupFolder, ctx.sessionId, ['open', url.toString()]);
+  await runBrowserCommand(ctx.groupFolder, ctx.sessionId, [
+    'open',
+    url.toString(),
+  ]);
   await assertActiveBrowserUrlSafe(ctx.groupFolder, ctx.sessionId);
   const pageUrl = await runBrowserCommand(ctx.groupFolder, ctx.sessionId, [
     'get',
@@ -300,7 +317,11 @@ async function handleBrowserSnapshot(
   if (typeof args.scope === 'string' && args.scope) {
     browserArgs.push('-s', args.scope);
   }
-  const output = await runBrowserCommand(ctx.groupFolder, ctx.sessionId, browserArgs);
+  const output = await runBrowserCommand(
+    ctx.groupFolder,
+    ctx.sessionId,
+    browserArgs,
+  );
   return truncate(output);
 }
 
@@ -322,7 +343,11 @@ async function handleBrowserFill(
   const args = parseObjectArgs(rawArgs);
   const target = requireString(args, 'target');
   const text = requireString(args, 'text');
-  await runBrowserCommand(ctx.groupFolder, ctx.sessionId, ['fill', target, text]);
+  await runBrowserCommand(ctx.groupFolder, ctx.sessionId, [
+    'fill',
+    target,
+    text,
+  ]);
   await assertActiveBrowserUrlSafe(ctx.groupFolder, ctx.sessionId);
   return JSON.stringify({ ok: true, target }, null, 2);
 }
@@ -359,7 +384,11 @@ async function handleBrowserWait(
       'browser_wait requires one of target, text, url_pattern, load, or ms',
     );
   }
-  const output = await runBrowserCommand(ctx.groupFolder, ctx.sessionId, browserArgs);
+  const output = await runBrowserCommand(
+    ctx.groupFolder,
+    ctx.sessionId,
+    browserArgs,
+  );
   await assertActiveBrowserUrlSafe(ctx.groupFolder, ctx.sessionId);
   return truncate(output || 'ok');
 }
@@ -375,7 +404,11 @@ async function handleBrowserGet(
   if (field === 'text') {
     browserArgs.push(requireString(args, 'target'));
   }
-  const output = await runBrowserCommand(ctx.groupFolder, ctx.sessionId, browserArgs);
+  const output = await runBrowserCommand(
+    ctx.groupFolder,
+    ctx.sessionId,
+    browserArgs,
+  );
   return truncate(output);
 }
 
@@ -471,7 +504,10 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
         parameters: {
           type: 'object',
           properties: {
-            key: { type: 'string', description: 'Key name, for example Enter.' },
+            key: {
+              type: 'string',
+              description: 'Key name, for example Enter.',
+            },
           },
           required: ['key'],
         },
@@ -494,7 +530,8 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
             },
             load: {
               type: 'string',
-              description: 'Load state like load, domcontentloaded, or networkidle.',
+              description:
+                'Load state like load, domcontentloaded, or networkidle.',
             },
             ms: { type: 'integer', description: 'Milliseconds to wait.' },
           },
@@ -535,7 +572,8 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_close',
-        description: 'Close the sandboxed browser session for the current chat session.',
+        description:
+          'Close the sandboxed browser session for the current chat session.',
         parameters: { type: 'object', properties: {} },
       },
     },

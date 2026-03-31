@@ -82,7 +82,10 @@ function normalizeHostname(url: URL): string {
 export async function resolveSafeHttpDestination(
   url: URL,
   allowPrivate: boolean,
-): Promise<{ hostname: string; addresses: Array<{ address: string; family: number }> }> {
+): Promise<{
+  hostname: string;
+  addresses: Array<{ address: string; family: number }>;
+}> {
   const hostname = normalizeHostname(url);
   const literalIpVersion = isIP(hostname);
   if (literalIpVersion) {

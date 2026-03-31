@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
-import { type BaseMessage, type SendMsgBody, WSClient } from '@wecom/aibot-node-sdk';
+import {
+  type BaseMessage,
+  type SendMsgBody,
+  WSClient,
+} from '@wecom/aibot-node-sdk';
 
 import {
   ASSISTANT_NAME,
@@ -24,7 +28,9 @@ function toWeComJid(message: BaseMessage): string {
 }
 
 function jidToChatId(jid: string): string {
-  return jid.startsWith(WECOM_JID_PREFIX) ? jid.slice(WECOM_JID_PREFIX.length) : jid;
+  return jid.startsWith(WECOM_JID_PREFIX)
+    ? jid.slice(WECOM_JID_PREFIX.length)
+    : jid;
 }
 
 function buildMessageContent(message: BaseMessage): string {
@@ -41,7 +47,8 @@ function buildMessageContent(message: BaseMessage): string {
       return (
         message.mixed?.msg_item
           .map((item: { msgtype: string; text?: { content: string } }) => {
-            if (item.msgtype === 'text') return item.text?.content?.trim() || '';
+            if (item.msgtype === 'text')
+              return item.text?.content?.trim() || '';
             if (item.msgtype === 'image') return '[image message]';
             return '';
           })
@@ -97,10 +104,12 @@ export class WeComChannel implements Channel {
       secret: WECOM_BOT_SECRET,
       ...(WECOM_WS_URL ? { wsUrl: WECOM_WS_URL } : {}),
       logger: {
-        debug: (message, ...args) => logger.debug({ args }, `[wecom] ${message}`),
+        debug: (message, ...args) =>
+          logger.debug({ args }, `[wecom] ${message}`),
         info: (message, ...args) => logger.info({ args }, `[wecom] ${message}`),
         warn: (message, ...args) => logger.warn({ args }, `[wecom] ${message}`),
-        error: (message, ...args) => logger.error({ args }, `[wecom] ${message}`),
+        error: (message, ...args) =>
+          logger.error({ args }, `[wecom] ${message}`),
       },
     });
 
@@ -261,7 +270,10 @@ export class WeComChannel implements Channel {
       requiresTrigger: false,
       isMain: true,
     });
-    logger.info({ chatJid }, 'Auto-registered first WeCom direct chat as main group');
+    logger.info(
+      { chatJid },
+      'Auto-registered first WeCom direct chat as main group',
+    );
   }
 }
 
