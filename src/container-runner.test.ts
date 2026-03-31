@@ -171,7 +171,9 @@ describe('container-runner timeout behavior', () => {
     fakeProc = createFakeProcess();
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.readdirSync).mockReturnValue([]);
-    vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => false } as fs.Stats);
+    vi.mocked(fs.statSync).mockReturnValue({
+      isDirectory: () => false,
+    } as fs.Stats);
   });
 
   afterEach(() => {
@@ -270,23 +272,31 @@ describe('container-runner timeout behavior', () => {
       const filePath = String(target);
       return (
         filePath === '/tmp/nanoclaw-test-groups/test-group' ||
-        filePath === '/Users/yangkai/Documents/github.com/nanoclaw/container/skills' ||
-        filePath === '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/skills' ||
-        filePath === '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents'
+        filePath ===
+          '/Users/yangkai/Documents/github.com/nanoclaw/container/skills' ||
+        filePath ===
+          '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/skills' ||
+        filePath ===
+          '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents'
       );
     });
     vi.mocked(fs.readdirSync).mockImplementation((target) => {
       const dirPath = String(target);
-      if (dirPath === '/Users/yangkai/Documents/github.com/nanoclaw/container/skills') {
+      if (
+        dirPath ===
+        '/Users/yangkai/Documents/github.com/nanoclaw/container/skills'
+      ) {
         return ['status'] as unknown as ReturnType<typeof fs.readdirSync>;
       }
       if (
-        dirPath === '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/skills'
+        dirPath ===
+        '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/skills'
       ) {
         return ['api-design'] as unknown as ReturnType<typeof fs.readdirSync>;
       }
       if (
-        dirPath === '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents'
+        dirPath ===
+        '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents'
       ) {
         return ['architect.md'] as unknown as ReturnType<typeof fs.readdirSync>;
       }

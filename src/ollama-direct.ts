@@ -112,7 +112,10 @@ function getPooledAgent(address: string, family: number): Agent {
 async function resolveSafeHttpDestinationCached(
   url: URL,
   allowPrivate: boolean,
-): Promise<{ hostname: string; addresses: Array<{ address: string; family: number }> }> {
+): Promise<{
+  hostname: string;
+  addresses: Array<{ address: string; family: number }>;
+}> {
   const cacheKey = `${url.hostname}\0${allowPrivate ? '1' : '0'}`;
   const now = Date.now();
   const hit = dnsCache.get(cacheKey);
@@ -309,9 +312,10 @@ function unquoteFrontmatterValue(value: string): string {
   return trimmed;
 }
 
-function parseFrontmatterMetadata(
-  content: string,
-): { name?: string; description?: string } {
+function parseFrontmatterMetadata(content: string): {
+  name?: string;
+  description?: string;
+} {
   const match = content.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
   if (!match) {
     return {};
@@ -339,7 +343,13 @@ function readEccFrontmatterPrefix(filePath: string): string | null {
     }
     fd = fs.openSync(filePath, 'r');
     const buffer = Buffer.alloc(MAX_ECC_METADATA_FILE_BYTES);
-    const bytesRead = fs.readSync(fd, buffer, 0, MAX_ECC_METADATA_FILE_BYTES, 0);
+    const bytesRead = fs.readSync(
+      fd,
+      buffer,
+      0,
+      MAX_ECC_METADATA_FILE_BYTES,
+      0,
+    );
     const content = buffer.toString('utf-8', 0, bytesRead).trim();
     return content || null;
   } catch (error) {

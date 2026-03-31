@@ -308,7 +308,9 @@ description: Software architecture specialist for system design decisions.
     expect(result.status).toBe('success');
     const [, init] = fetchMock.mock.calls[0]!;
     const body = JSON.parse(String(init?.body));
-    expect(body.messages[0].content).toContain('Valid ECC skill names: ["oversized-skill"]');
+    expect(body.messages[0].content).toContain(
+      'Valid ECC skill names: ["oversized-skill"]',
+    );
   });
 
   it('preserves exact ECC names in allowlists', async () => {
@@ -357,7 +359,9 @@ description: Mixed unicode name.
 
     const [, init] = fetchMock.mock.calls[0]!;
     const body = JSON.parse(String(init?.body));
-    expect(body.messages[0].content).toContain('Valid ECC skill names: ["api-设计"]');
+    expect(body.messages[0].content).toContain(
+      'Valid ECC skill names: ["api-设计"]',
+    );
   });
 
   it('keeps agent summaries even when many skills are present', async () => {
@@ -440,12 +444,14 @@ description: Software architecture specialist for system design decisions.
     );
     fs.mkdirSync(path.join(eccRoot, 'skills'), { recursive: true });
 
-    const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((target) => {
-      if (String(target) === path.join(eccRoot, 'skills')) {
-        throw new Error('EACCES');
-      }
-      return [] as unknown as ReturnType<typeof fs.readdirSync>;
-    });
+    const readdirSpy = vi
+      .spyOn(fs, 'readdirSync')
+      .mockImplementation((target) => {
+        if (String(target) === path.join(eccRoot, 'skills')) {
+          throw new Error('EACCES');
+        }
+        return [] as unknown as ReturnType<typeof fs.readdirSync>;
+      });
 
     const group: RegisteredGroup = {
       name: 'Main',
