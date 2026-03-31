@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
+import fs from 'fs';
 
 // Sentinel markers must match container-runner.ts
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -9,6 +10,7 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 // Mock config
 vi.mock('./config.js', () => ({
   ANTHROPIC_MODEL: undefined,
+  CONTAINER_HTTP_PROXY: undefined,
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
@@ -47,7 +49,20 @@ vi.mock('fs', async () => {
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
       copyFileSync: vi.fn(),
+      cpSync: vi.fn(),
     },
+  };
+});
+
+vi.mock('os', async () => {
+  const actual = await vi.importActual<typeof import('os')>('os');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      homedir: vi.fn(() => '/tmp/test-home'),
+    },
+    homedir: vi.fn(() => '/tmp/test-home'),
   };
 });
 
@@ -154,6 +169,9 @@ describe('container-runner timeout behavior', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     fakeProc = createFakeProcess();
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readdirSync).mockReturnValue([]);
+    vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => false } as fs.Stats);
   });
 
   afterEach(() => {
@@ -245,5 +263,61 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+
+  it('syncs everything-claude-code skills and agents into per-group claude dir', async () => {
+    vi.mocked(fs.existsSync).mockImplementation((target) => {
+      const filePath = String(target);
+      return (
+        filePath === '/tmp/nanoclaw-test-groups/test-group' ||
+        filePath === '/Users/yangkai/Documents/github.com/nanoclaw/container/skills' ||
+        filePath === '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/skills' ||
+        filePath === '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents'
+      );
+    });
+    vi.mocked(fs.readdirSync).mockImplementation((target) => {
+      const dirPath = String(target);
+      if (dirPath === '/Users/yangkai/Documents/github.com/nanoclaw/container/skills') {
+        return ['status'] as unknown as ReturnType<typeof fs.readdirSync>;
+      }
+      if (
+        dirPath === '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/skills'
+      ) {
+        return ['api-design'] as unknown as ReturnType<typeof fs.readdirSync>;
+      }
+      if (
+        dirPath === '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents'
+      ) {
+        return ['architect.md'] as unknown as ReturnType<typeof fs.readdirSync>;
+      }
+      return [] as unknown as ReturnType<typeof fs.readdirSync>;
+    });
+    vi.mocked(fs.statSync).mockImplementation(
+      (target) =>
+        ({
+          isDirectory: () => !String(target).endsWith('.md'),
+        }) as fs.Stats,
+    );
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    fakeProc.emit('close', 1);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    expect(vi.mocked(fs.cpSync)).toHaveBeenCalledWith(
+      '/Users/yangkai/Documents/github.com/nanoclaw/container/skills/status',
+      '/tmp/nanoclaw-test-data/sessions/test-group/.claude/skills/status',
+      { recursive: true },
+    );
+    expect(vi.mocked(fs.cpSync)).toHaveBeenCalledWith(
+      '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/skills/api-design',
+      '/tmp/nanoclaw-test-data/sessions/test-group/.claude/skills/api-design',
+      { recursive: true },
+    );
+    expect(vi.mocked(fs.cpSync)).toHaveBeenCalledWith(
+      '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents/architect.md',
+      '/tmp/nanoclaw-test-data/sessions/test-group/.claude/agents/architect.md',
+      { recursive: true },
+    );
   });
 });

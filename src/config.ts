@@ -9,6 +9,7 @@ const envConfig = readEnvFile([
   'ANTHROPIC_MODEL',
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
+  'CONTAINER_HTTP_PROXY',
   'CREDENTIAL_PROXY_PORT',
   'MODEL_BACKEND',
   'OLLAMA_ADMIN_TOOLS',
@@ -76,6 +77,8 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
+export const CONTAINER_HTTP_PROXY =
+  process.env.CONTAINER_HTTP_PROXY || envConfig.CONTAINER_HTTP_PROXY || '';
 export const CONTAINER_TIMEOUT = parseInt(
   process.env.CONTAINER_TIMEOUT || '1800000',
   10,

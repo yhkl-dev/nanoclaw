@@ -51,6 +51,30 @@ interface BrowserToolContext {
   sessionId: string;
 }
 
+interface BrowserContainerState {
+  containerName: string;
+  reused: boolean;
+  startupMs: number;
+  lookupMs: number;
+}
+
+function summarizeBrowserCommand(browserArgs: string[]): {
+  action: string;
+  target?: string;
+} {
+  const [action = 'unknown', target] = browserArgs;
+  if (
+    action === 'open' ||
+    action === 'fill' ||
+    action === 'type' ||
+    action === 'keyboard' ||
+    action === 'wait'
+  ) {
+    return { action };
+  }
+  return target ? { action, target } : { action };
+}
+
 function browserContainerName(groupFolder: string, sessionId: string): string {
   return `${BROWSER_CONTAINER_PREFIX}-${groupFolder}-${sessionId}`.toLowerCase();
 }
@@ -166,13 +190,19 @@ async function waitForBrowserContainerReady(
 async function ensureBrowserContainer(
   groupFolder: string,
   sessionId: string,
-): Promise<string> {
+): Promise<BrowserContainerState> {
   assertValidGroupFolder(groupFolder);
   ensureContainerRuntimeRunning();
 
   const containerName = browserContainerName(groupFolder, sessionId);
+  const startedAt = Date.now();
   if (await inspectContainerRunning(containerName)) {
-    return containerName;
+    return {
+      containerName,
+      reused: true,
+      startupMs: 0,
+      lookupMs: Date.now() - startedAt,
+    };
   }
 
   try {
@@ -200,7 +230,23 @@ async function ensureBrowserContainer(
 
   await dockerExec(runArgs);
   await waitForBrowserContainerReady(containerName);
-  return containerName;
+  const startupMs = Date.now() - startedAt;
+  logger.info(
+    {
+      groupFolder,
+      sessionId,
+      containerName,
+      reused: false,
+      startupMs,
+    },
+    'Browser sidecar ready',
+  );
+  return {
+    containerName,
+    reused: false,
+    startupMs,
+    lookupMs: 0,
+  };
 }
 
 async function runBrowserCommand(
@@ -208,15 +254,39 @@ async function runBrowserCommand(
   sessionId: string,
   browserArgs: string[],
 ): Promise<string> {
-  const containerName = await ensureBrowserContainer(groupFolder, sessionId);
-  return dockerExec([
-    'exec',
-    '-u',
-    'node',
-    containerName,
-    'agent-browser',
-    ...browserArgs,
-  ]);
+  const containerState = await ensureBrowserContainer(groupFolder, sessionId);
+  const startedAt = Date.now();
+  const commandSummary = summarizeBrowserCommand(browserArgs);
+  let success = false;
+  try {
+    const output = await dockerExec([
+      'exec',
+      '-u',
+      'node',
+      containerState.containerName,
+      'agent-browser',
+      ...browserArgs,
+    ]);
+    success = true;
+    return output;
+  } finally {
+    logger.info(
+      {
+        groupFolder,
+        sessionId,
+        containerName: containerState.containerName,
+        ...commandSummary,
+        success,
+        durationMs: Date.now() - startedAt,
+        sidecarReused: containerState.reused,
+        sidecarLookupMs: containerState.lookupMs,
+        ...(containerState.reused
+          ? {}
+          : { sidecarStartupMs: containerState.startupMs }),
+      },
+      'Browser command finished',
+    );
+  }
 }
 
 async function getCurrentBrowserUrl(

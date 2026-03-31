@@ -4,10 +4,12 @@
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
   ANTHROPIC_MODEL,
+  CONTAINER_HTTP_PROXY,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -61,6 +63,37 @@ interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+}
+
+function syncDirectoryChildren(srcRoot: string, dstRoot: string): void {
+  if (!fs.existsSync(srcRoot)) {
+    return;
+  }
+  fs.mkdirSync(dstRoot, { recursive: true });
+  for (const entry of fs.readdirSync(srcRoot)) {
+    const srcPath = path.join(srcRoot, entry);
+    if (!fs.statSync(srcPath).isDirectory()) {
+      continue;
+    }
+    fs.cpSync(srcPath, path.join(dstRoot, entry), { recursive: true });
+  }
+}
+
+function syncFiles(srcRoot: string, dstRoot: string, extension?: string): void {
+  if (!fs.existsSync(srcRoot)) {
+    return;
+  }
+  fs.mkdirSync(dstRoot, { recursive: true });
+  for (const entry of fs.readdirSync(srcRoot)) {
+    if (extension && !entry.endsWith(extension)) {
+      continue;
+    }
+    const srcPath = path.join(srcRoot, entry);
+    if (fs.statSync(srcPath).isDirectory()) {
+      continue;
+    }
+    fs.cpSync(srcPath, path.join(dstRoot, entry), { recursive: true });
+  }
 }
 
 export function normalizeOllamaHostForContainer(rawHost: string): string {
@@ -169,14 +202,21 @@ function buildVolumeMounts(
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
-    }
-  }
+  syncDirectoryChildren(skillsSrc, skillsDst);
+
+  const eccRoot = path.join(
+    os.homedir(),
+    '.claude',
+    'plugins',
+    'marketplaces',
+    'everything-claude-code',
+  );
+  syncDirectoryChildren(path.join(eccRoot, 'skills'), skillsDst);
+  syncFiles(
+    path.join(eccRoot, 'agents'),
+    path.join(groupSessionsDir, 'agents'),
+    '.md',
+  );
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -280,6 +320,14 @@ function buildContainerArgs(
   }
   if (OLLAMA_MODEL) {
     args.push('-e', `OLLAMA_MODEL=${OLLAMA_MODEL}`);
+  }
+
+  // HTTP proxy for container network access (e.g. Clash on LAN)
+  if (CONTAINER_HTTP_PROXY) {
+    args.push('-e', `HTTP_PROXY=${CONTAINER_HTTP_PROXY}`);
+    args.push('-e', `HTTPS_PROXY=${CONTAINER_HTTP_PROXY}`);
+    args.push('-e', `http_proxy=${CONTAINER_HTTP_PROXY}`);
+    args.push('-e', `https_proxy=${CONTAINER_HTTP_PROXY}`);
   }
 
   // Runtime-specific args for host gateway resolution
