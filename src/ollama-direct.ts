@@ -280,7 +280,8 @@ function saveSessionMessages(
 ): void {
   const sessionDir = getSessionDir(groupFolder);
   fs.mkdirSync(sessionDir, { recursive: true });
-  const trimmed = sanitizeSessionMessages(messages).slice(-MAX_HISTORY_MESSAGES);
+  const trimmed =
+    sanitizeSessionMessages(messages).slice(-MAX_HISTORY_MESSAGES);
   const payload: OllamaSession = {
     messages: trimmed,
     updatedAt: new Date().toISOString(),
@@ -545,10 +546,20 @@ async function executeToolCall(
   if (toolCall.function.name === 'http_request') {
     try {
       const result = await runHttpRequestTool(toolCall.function.arguments);
-      logger.warn({ tool: 'http_request', args: toolCall.function.arguments }, 'http_request tool executed');
+      logger.warn(
+        { tool: 'http_request', args: toolCall.function.arguments },
+        'http_request tool executed',
+      );
       return result;
     } catch (err) {
-      logger.warn({ tool: 'http_request', args: toolCall.function.arguments, error: err instanceof Error ? err.message : String(err) }, 'http_request tool FAILED');
+      logger.warn(
+        {
+          tool: 'http_request',
+          args: toolCall.function.arguments,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        'http_request tool FAILED',
+      );
       throw err;
     }
   }
@@ -592,7 +603,7 @@ async function chatWithOllama(
   }
   logger.warn(
     {
-      hasToolCalls: !!(parsed.message?.tool_calls?.length),
+      hasToolCalls: !!parsed.message?.tool_calls?.length,
       toolCalls: parsed.message?.tool_calls?.map((c) => c.function.name),
       contentPreview: parsed.message?.content?.slice(0, 120),
     },
