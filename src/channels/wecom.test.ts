@@ -26,8 +26,8 @@ vi.mock('@wecom/aibot-node-sdk', () => ({
 }));
 
 vi.mock('../config.js', () => ({
-  ASSISTANT_NAME: 'Andy',
-  DEFAULT_TRIGGER: '@Andy',
+  ASSISTANT_NAME: 'Henry',
+  DEFAULT_TRIGGER: '@Henry',
   WECOM_BOT_ID: 'bot-id',
   WECOM_BOT_SECRET: 'bot-secret',
   WECOM_WS_URL: undefined,
@@ -82,7 +82,7 @@ describe('WeComChannel', () => {
         chattype: 'group',
         from: { userid: 'alice' },
         msgtype: 'text',
-        text: { content: '@Andy hello' },
+        text: { content: '@Henry hello' },
         create_time: 1710000000,
       },
     });
@@ -101,7 +101,7 @@ describe('WeComChannel', () => {
         chat_jid: 'wecom:room-1',
         sender: 'wecom:alice',
         sender_name: 'alice',
-        content: '@Andy hello',
+        content: '@Henry hello',
       }),
     );
     expect(registerGroup).not.toHaveBeenCalled();
@@ -135,7 +135,7 @@ describe('WeComChannel', () => {
       expect.objectContaining({
         chat_jid: 'wecom:user-1',
         sender: 'wecom:bot',
-        sender_name: 'Andy',
+        sender_name: 'Henry',
         content: 'reply text',
         is_from_me: true,
         is_bot_message: true,
@@ -162,7 +162,7 @@ describe('WeComChannel', () => {
         chattype: 'single',
         from: { userid: 'YangKai' },
         msgtype: 'text',
-        text: { content: '@Andy 你好' },
+        text: { content: '@Henry 你好' },
         create_time: 1710000001,
       },
     });
@@ -171,7 +171,7 @@ describe('WeComChannel', () => {
       'wecom:YangKai',
       expect.objectContaining({
         folder: 'main',
-        trigger: '@Andy',
+        trigger: '@Henry',
         requiresTrigger: false,
         isMain: true,
       }),

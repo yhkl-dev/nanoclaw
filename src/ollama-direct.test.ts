@@ -27,7 +27,7 @@ const mockedConfigFlags = vi.hoisted(() => ({
 }));
 
 vi.mock('./config.js', () => ({
-  ASSISTANT_NAME: 'Andy',
+  ASSISTANT_NAME: 'Henry',
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_TIMEOUT: 30_000,
   DATA_DIR: mockedPaths.dataDir,
@@ -133,7 +133,7 @@ describe('runDirectOllamaAgent', () => {
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -164,7 +164,7 @@ describe('runDirectOllamaAgent', () => {
     expect(body.model).toBe('qwen3-coder:30b');
     expect(body.stream).toBe(false);
     expect(body.messages[0].role).toBe('system');
-    expect(body.messages[0].content).toContain('Andy');
+    expect(body.messages[0].content).toContain('Henry');
     expect(body.messages[0].content).toContain(
       'If the user sends literal <agent-browser ...> tags',
     );
@@ -207,7 +207,7 @@ describe('runDirectOllamaAgent', () => {
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -240,7 +240,7 @@ describe('runDirectOllamaAgent', () => {
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -309,7 +309,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -374,7 +374,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -426,7 +426,7 @@ description: Mixed unicode name.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -487,7 +487,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -537,7 +537,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -586,7 +586,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -642,7 +642,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -704,7 +704,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -763,7 +763,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -829,7 +829,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -890,7 +890,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -959,7 +959,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1039,7 +1039,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1096,7 +1096,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1149,7 +1149,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1206,7 +1206,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1320,7 +1320,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1437,7 +1437,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1512,7 +1512,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1603,7 +1603,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1697,7 +1697,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1795,7 +1795,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1840,7 +1840,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1873,7 +1873,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1905,7 +1905,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1938,7 +1938,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -1972,7 +1972,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2008,7 +2008,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2097,7 +2097,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2136,7 +2136,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2215,7 +2215,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2247,7 +2247,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2300,7 +2300,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2353,7 +2353,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2443,7 +2443,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2523,7 +2523,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2566,7 +2566,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2590,7 +2590,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2629,7 +2629,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2677,7 +2677,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2709,7 +2709,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };
@@ -2729,7 +2729,7 @@ description: Software architecture specialist for system design decisions.
     const group: RegisteredGroup = {
       name: 'Main',
       folder: 'main',
-      trigger: '@Andy',
+      trigger: '@Henry',
       added_at: new Date().toISOString(),
       isMain: true,
     };

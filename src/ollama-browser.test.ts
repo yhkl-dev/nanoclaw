@@ -1438,7 +1438,10 @@ describe('ollama browser tools', () => {
       await executeBrowserToolCall(
         'browser_get_title',
         {},
-        { groupFolder: 'main', sessionId: 'session-history-redirected-restore' },
+        {
+          groupFolder: 'main',
+          sessionId: 'session-history-redirected-restore',
+        },
       ),
     ).toBe('Example Domain');
 
@@ -1446,7 +1449,10 @@ describe('ollama browser tools', () => {
       executeBrowserToolCall(
         'browser_back',
         {},
-        { groupFolder: 'main', sessionId: 'session-history-redirected-restore' },
+        {
+          groupFolder: 'main',
+          sessionId: 'session-history-redirected-restore',
+        },
       ),
     ).rejects.toThrow('Browser history was lost');
 

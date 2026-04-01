@@ -31,7 +31,7 @@ const envConfig = readEnvFile([
 export const ANTHROPIC_MODEL =
   process.env.ANTHROPIC_MODEL || envConfig.ANTHROPIC_MODEL;
 export const ASSISTANT_NAME =
-  process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
+  process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Henry';
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER ||
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
