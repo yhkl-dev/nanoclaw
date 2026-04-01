@@ -7,9 +7,15 @@
 import fs from 'fs';
 import path from 'path';
 
-import { STORE_DIR } from '../src/config.ts';
+import {
+  DEFAULT_ASSISTANT_NAME,
+  updateAssistantNameEnvFile,
+  updateClaudeMdAssistantIdentity,
+} from '../src/assistant-name.ts';
+import { ASSISTANT_NAME, STORE_DIR } from '../src/config.ts';
 import { initDatabase, setRegisteredGroup } from '../src/db.ts';
 import { isValidGroupFolder } from '../src/group-folder.ts';
+import { sanitizeInstalledLaunchdPlist } from '../src/launchd.ts';
 import { logger } from '../src/logger.ts';
 import { emitStatus } from './status.ts';
 
@@ -33,7 +39,7 @@ function parseArgs(args: string[]): RegisterArgs {
     channel: 'whatsapp', // backward-compat: pre-refactor installs omit --channel
     requiresTrigger: true,
     isMain: false,
-    assistantName: 'Henry',
+    assistantName: ASSISTANT_NAME || DEFAULT_ASSISTANT_NAME,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -60,7 +66,7 @@ function parseArgs(args: string[]): RegisterArgs {
         result.isMain = true;
         break;
       case '--assistant-name':
-        result.assistantName = args[++i] || 'Henry';
+        result.assistantName = args[++i] || ASSISTANT_NAME || DEFAULT_ASSISTANT_NAME;
         break;
     }
   }
@@ -140,11 +146,12 @@ export async function run(args: string[]): Promise<void> {
     }
   }
 
-  // Update assistant name in CLAUDE.md files if different from default
+  // Update assistant name in CLAUDE.md files, including safe legacy Andy -> Henry
+  // upgrades for existing installs.
   let nameUpdated = false;
-  if (parsed.assistantName !== 'Henry') {
+  {
     logger.info(
-      { from: 'Henry', to: parsed.assistantName },
+      { from: DEFAULT_ASSISTANT_NAME, to: parsed.assistantName },
       'Updating assistant name',
     );
 
@@ -155,36 +162,21 @@ export async function run(args: string[]): Promise<void> {
       .filter((f) => fs.existsSync(f));
 
     for (const mdFile of mdFiles) {
-      if (fs.existsSync(mdFile)) {
-        let content = fs.readFileSync(mdFile, 'utf-8');
-        content = content.replace(/^# Henry$/m, `# ${parsed.assistantName}`);
-        content = content.replace(
-          /You are Henry/g,
-          `You are ${parsed.assistantName}`,
-        );
-        fs.writeFileSync(mdFile, content);
+      if (updateClaudeMdAssistantIdentity(mdFile, parsed.assistantName)) {
         logger.info({ file: mdFile }, 'Updated CLAUDE.md');
+        nameUpdated = true;
       }
     }
 
-    // Update .env
     const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      let envContent = fs.readFileSync(envFile, 'utf-8');
-      if (envContent.includes('ASSISTANT_NAME=')) {
-        envContent = envContent.replace(
-          /^ASSISTANT_NAME=.*$/m,
-          `ASSISTANT_NAME="${parsed.assistantName}"`,
-        );
-      } else {
-        envContent += `\nASSISTANT_NAME="${parsed.assistantName}"`;
-      }
-      fs.writeFileSync(envFile, envContent);
-    } else {
-      fs.writeFileSync(envFile, `ASSISTANT_NAME="${parsed.assistantName}"\n`);
+    if (updateAssistantNameEnvFile(envFile, parsed.assistantName)) {
+      logger.info('Set ASSISTANT_NAME in .env');
+      nameUpdated = true;
     }
-    logger.info('Set ASSISTANT_NAME in .env');
-    nameUpdated = true;
+
+    if (sanitizeInstalledLaunchdPlist()) {
+      nameUpdated = true;
+    }
   }
 
   emitStatus('REGISTER_CHANNEL', {

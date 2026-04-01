@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import path from 'path';
 
+import { stripAssistantNameFromLaunchdPlist } from '../src/launchd.ts';
+
 const SERVICE_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
 
 /**
@@ -110,6 +112,39 @@ describe('plist generation', () => {
     );
     expect(plist).toContain('nanoclaw.log');
     expect(plist).toContain('nanoclaw.error.log');
+  });
+
+  it('does not include ASSISTANT_NAME in generated plist', () => {
+    const plist = generatePlist(
+      '/usr/local/bin/node',
+      '/home/user/nanoclaw',
+      '/home/user',
+    );
+    expect(plist).not.toContain('ASSISTANT_NAME');
+  });
+});
+
+describe('launchd plist migration', () => {
+  it('removes legacy ASSISTANT_NAME entries from installed plists', () => {
+    const original = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin</string>
+        <key>ASSISTANT_NAME</key>
+        <string>Henry</string>
+        <key>HOME</key>
+        <string>/Users/test</string>
+    </dict>
+</dict>
+</plist>`;
+
+    const updated = stripAssistantNameFromLaunchdPlist(original);
+
+    expect(updated).not.toContain('ASSISTANT_NAME');
+    expect(updated).toContain('<key>HOME</key>');
   });
 });
 

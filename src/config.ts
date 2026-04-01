@@ -1,6 +1,10 @@
 import os from 'os';
 import path from 'path';
 
+import {
+  DEFAULT_ASSISTANT_NAME,
+  LEGACY_ASSISTANT_NAMES,
+} from './assistant-name.js';
 import { readEnvFile } from './env.js';
 import { isValidTimezone } from './timezone.js';
 
@@ -30,8 +34,19 @@ const envConfig = readEnvFile([
 
 export const ANTHROPIC_MODEL =
   process.env.ANTHROPIC_MODEL || envConfig.ANTHROPIC_MODEL;
+function normalizeAssistantName(name?: string): string | undefined {
+  if (!name) return undefined;
+  return LEGACY_ASSISTANT_NAMES.includes(name) ? DEFAULT_ASSISTANT_NAME : name;
+}
+
+const processAssistantName = normalizeAssistantName(process.env.ASSISTANT_NAME);
+const fileAssistantName = normalizeAssistantName(envConfig.ASSISTANT_NAME);
+
 export const ASSISTANT_NAME =
-  process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Henry';
+  (processAssistantName === DEFAULT_ASSISTANT_NAME && fileAssistantName) ||
+  processAssistantName ||
+  fileAssistantName ||
+  DEFAULT_ASSISTANT_NAME;
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER ||
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';

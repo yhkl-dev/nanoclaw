@@ -4,6 +4,10 @@ import path from 'path';
 import { afterEach, describe, it, expect, beforeEach } from 'vitest';
 
 import Database from 'better-sqlite3';
+import {
+  replaceAssistantIdentityInClaudeMd,
+  updateAssistantNameEnvFile,
+} from '../src/assistant-name.ts';
 
 /**
  * Tests for the register step.
@@ -217,45 +221,90 @@ describe('parameterized SQL registration', () => {
 
 describe('file templating', () => {
   it('replaces assistant name in CLAUDE.md content', () => {
-    let content = '# Henry\n\nYou are Henry, a personal assistant.';
-
-    content = content.replace(/^# Henry$/m, '# Nova');
-    content = content.replace(/You are Henry/g, 'You are Nova');
+    const content = replaceAssistantIdentityInClaudeMd(
+      '# Henry\n\nYou are Henry, a personal assistant.',
+      'Nova',
+    );
 
     expect(content).toBe('# Nova\n\nYou are Nova, a personal assistant.');
   });
 
   it('handles names with special regex characters', () => {
-    let content = '# Henry\n\nYou are Henry.';
-
     const newName = 'C.L.A.U.D.E';
-    content = content.replace(/^# Henry$/m, `# ${newName}`);
-    content = content.replace(/You are Henry/g, `You are ${newName}`);
+    const content = replaceAssistantIdentityInClaudeMd(
+      '# Henry\n\nYou are Henry.',
+      newName,
+    );
 
     expect(content).toContain('# C.L.A.U.D.E');
     expect(content).toContain('You are C.L.A.U.D.E.');
   });
 
-  it('updates .env ASSISTANT_NAME line', () => {
-    let envContent = 'SOME_KEY=value\nASSISTANT_NAME="Henry"\nOTHER=test';
-
-    envContent = envContent.replace(
-      /^ASSISTANT_NAME=.*$/m,
-      'ASSISTANT_NAME="Nova"',
+  it('migrates legacy Andy CLAUDE.md content to Henry', () => {
+    const content = replaceAssistantIdentityInClaudeMd(
+      '# Andy\n\nYou are Andy, a personal assistant.',
+      'Henry',
     );
+
+    expect(content).toBe('# Henry\n\nYou are Henry, a personal assistant.');
+  });
+
+  it('updates .env ASSISTANT_NAME line', () => {
+    const envFile = path.join(
+      os.tmpdir(),
+      `nanoclaw-env-test-${Date.now()}-${Math.random()}.env`,
+    );
+    fs.writeFileSync(envFile, 'SOME_KEY=value\nASSISTANT_NAME="Henry"\nOTHER=test');
+
+    updateAssistantNameEnvFile(envFile, 'Nova');
+    const envContent = fs.readFileSync(envFile, 'utf-8');
 
     expect(envContent).toContain('ASSISTANT_NAME="Nova"');
     expect(envContent).toContain('SOME_KEY=value');
+    fs.unlinkSync(envFile);
   });
 
   it('appends ASSISTANT_NAME to .env if not present', () => {
-    let envContent = 'SOME_KEY=value\n';
-
-    if (!envContent.includes('ASSISTANT_NAME=')) {
-      envContent += '\nASSISTANT_NAME="Nova"';
-    }
+    const envFile = path.join(
+      os.tmpdir(),
+      `nanoclaw-env-test-${Date.now()}-${Math.random()}.env`,
+    );
+    fs.writeFileSync(envFile, 'SOME_KEY=value\n');
+    updateAssistantNameEnvFile(envFile, 'Nova');
+    const envContent = fs.readFileSync(envFile, 'utf-8');
 
     expect(envContent).toContain('ASSISTANT_NAME="Nova"');
+    fs.unlinkSync(envFile);
+  });
+
+  it('migrates legacy Andy ASSISTANT_NAME values back to Henry', () => {
+    const envFile = path.join(
+      os.tmpdir(),
+      `nanoclaw-env-test-${Date.now()}-${Math.random()}.env`,
+    );
+    fs.writeFileSync(envFile, 'ASSISTANT_NAME="Andy"\n');
+    updateAssistantNameEnvFile(envFile, 'Henry');
+
+    expect(fs.readFileSync(envFile, 'utf-8')).toContain(
+      'ASSISTANT_NAME="Henry"',
+    );
+    fs.unlinkSync(envFile);
+  });
+
+  it('does not append default Henry when ASSISTANT_NAME is missing during migration mode', () => {
+    const envFile = path.join(
+      os.tmpdir(),
+      `nanoclaw-env-test-${Date.now()}-${Math.random()}.env`,
+    );
+    fs.writeFileSync(envFile, 'SOME_KEY=value\n');
+    const changed = updateAssistantNameEnvFile(envFile, 'Henry', {
+      createIfMissing: false,
+      appendIfMissing: false,
+    });
+
+    expect(changed).toBe(false);
+    expect(fs.readFileSync(envFile, 'utf-8')).toBe('SOME_KEY=value\n');
+    fs.unlinkSync(envFile);
   });
 });
 
@@ -283,21 +332,17 @@ describe('CLAUDE.md template copy', () => {
       }
     }
 
-    // Name update across all groups (register.ts lines 140-165)
-    if (assistantName !== 'Henry') {
-      const mdFiles = fs
-        .readdirSync(groupsDir)
-        .map((d) => path.join(groupsDir, d, 'CLAUDE.md'))
-        .filter((f) => fs.existsSync(f));
+    // Name update across all groups, including Andy -> Henry upgrades.
+    const mdFiles = fs
+      .readdirSync(groupsDir)
+      .map((d) => path.join(groupsDir, d, 'CLAUDE.md'))
+      .filter((f) => fs.existsSync(f));
 
-      for (const mdFile of mdFiles) {
-        let content = fs.readFileSync(mdFile, 'utf-8');
-        content = content.replace(/^# Henry$/m, `# ${assistantName}`);
-        content = content.replace(
-          /You are Henry/g,
-          `You are ${assistantName}`,
-        );
-        fs.writeFileSync(mdFile, content);
+    for (const mdFile of mdFiles) {
+      const content = fs.readFileSync(mdFile, 'utf-8');
+      const updated = replaceAssistantIdentityInClaudeMd(content, assistantName);
+      if (updated !== content) {
+        fs.writeFileSync(mdFile, updated);
       }
     }
   }
@@ -415,6 +460,37 @@ describe('CLAUDE.md template copy', () => {
     const content = readGroupMd('slack_main');
     expect(content).toContain('Custom persona');
     expect(content).not.toContain('Admin Context');
+  });
+
+  it('safely upgrades legacy Andy identity in existing CLAUDE.md', () => {
+    simulateRegister('telegram_news', false);
+    const mdPath = path.join(groupsDir, 'telegram_news', 'CLAUDE.md');
+    fs.writeFileSync(
+      mdPath,
+      '# Andy\n\nYou are Andy, a personal assistant.\n\n## Notes\n\nKeep my custom rules.',
+    );
+
+    simulateRegister('telegram_news', false, 'Henry');
+
+    const content = readGroupMd('telegram_news');
+    expect(content).toContain('# Henry');
+    expect(content).toContain('You are Henry');
+    expect(content).toContain('Keep my custom rules.');
+  });
+
+  it('does not rewrite custom persona files that do not use legacy identity text', () => {
+    simulateRegister('discord_ops', false);
+    const mdPath = path.join(groupsDir, 'discord_ops', 'CLAUDE.md');
+    fs.writeFileSync(
+      mdPath,
+      '# Ops Brain\n\nCustom persona with deployment workflows.',
+    );
+
+    simulateRegister('discord_ops', false, 'Henry');
+
+    expect(readGroupMd('discord_ops')).toBe(
+      '# Ops Brain\n\nCustom persona with deployment workflows.',
+    );
   });
 
   it('never overwrites when non-main becomes main (isMain changes)', () => {

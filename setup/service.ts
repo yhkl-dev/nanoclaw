@@ -118,12 +118,32 @@ function setupLaunchd(
   logger.info({ plistPath }, 'Wrote launchd plist');
 
   try {
+    execSync(`launchctl unload ${JSON.stringify(plistPath)}`, {
+      stdio: 'ignore',
+    });
+    logger.info('launchctl unload succeeded');
+  } catch {
+    logger.warn('launchctl unload failed (may not be loaded yet)');
+  }
+
+  try {
     execSync(`launchctl load ${JSON.stringify(plistPath)}`, {
       stdio: 'ignore',
     });
     logger.info('launchctl load succeeded');
   } catch {
-    logger.warn('launchctl load failed (may already be loaded)');
+    logger.error('launchctl load failed');
+    emitStatus('SETUP_SERVICE', {
+      SERVICE_TYPE: 'launchd',
+      NODE_PATH: nodePath,
+      PROJECT_PATH: projectRoot,
+      PLIST_PATH: plistPath,
+      SERVICE_LOADED: false,
+      STATUS: 'failed',
+      ERROR: 'launchctl_load_failed',
+      LOG: 'logs/setup.log',
+    });
+    process.exit(1);
   }
 
   // Verify
@@ -135,12 +155,26 @@ function setupLaunchd(
     // launchctl list failed
   }
 
+  if (!serviceLoaded) {
+    emitStatus('SETUP_SERVICE', {
+      SERVICE_TYPE: 'launchd',
+      NODE_PATH: nodePath,
+      PROJECT_PATH: projectRoot,
+      PLIST_PATH: plistPath,
+      SERVICE_LOADED: false,
+      STATUS: 'failed',
+      ERROR: 'launchd_not_loaded',
+      LOG: 'logs/setup.log',
+    });
+    process.exit(1);
+  }
+
   emitStatus('SETUP_SERVICE', {
     SERVICE_TYPE: 'launchd',
     NODE_PATH: nodePath,
     PROJECT_PATH: projectRoot,
     PLIST_PATH: plistPath,
-    SERVICE_LOADED: serviceLoaded,
+    SERVICE_LOADED: true,
     STATUS: 'success',
     LOG: 'logs/setup.log',
   });

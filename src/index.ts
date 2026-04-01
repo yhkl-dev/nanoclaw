@@ -2,6 +2,13 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  DEFAULT_ASSISTANT_NAME,
+  LEGACY_ASSISTANT_NAMES,
+  replaceAssistantIdentityInClaudeMd,
+  updateAssistantNameEnvFile,
+  updateClaudeMdAssistantIdentity,
+} from './assistant-name.js';
+import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   DEFAULT_TRIGGER,
@@ -64,6 +71,10 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import {
+  installedLaunchdPlistHasAssistantName,
+  sanitizeInstalledLaunchdPlist,
+} from './launchd.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -88,6 +99,41 @@ function loadState(): void {
   }
   sessions = getAllSessions(MODEL_BACKEND);
   registeredGroups = getAllRegisteredGroups();
+  const explicitAssistantOverride = process.env.ASSISTANT_NAME;
+  const hasLegacyLaunchdAssistant = installedLaunchdPlistHasAssistantName();
+  const shouldPersistAssistantMigration =
+    !explicitAssistantOverride ||
+    explicitAssistantOverride === DEFAULT_ASSISTANT_NAME ||
+    LEGACY_ASSISTANT_NAMES.includes(explicitAssistantOverride) ||
+    hasLegacyLaunchdAssistant;
+
+  if (shouldPersistAssistantMigration) {
+    for (const [jid, group] of Object.entries(registeredGroups)) {
+      try {
+        const groupDir = resolveGroupFolderPath(group.folder);
+        const groupMdFile = path.join(groupDir, 'CLAUDE.md');
+        if (updateClaudeMdAssistantIdentity(groupMdFile, ASSISTANT_NAME)) {
+          logger.info(
+            { jid, folder: group.folder },
+            'Migrated existing CLAUDE.md assistant name',
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          { jid, folder: group.folder, err },
+          'Skipping CLAUDE.md assistant migration for invalid folder',
+        );
+      }
+    }
+    const envFile = path.join(process.cwd(), '.env');
+    updateAssistantNameEnvFile(envFile, ASSISTANT_NAME, {
+      createIfMissing:
+        hasLegacyLaunchdAssistant && ASSISTANT_NAME !== DEFAULT_ASSISTANT_NAME,
+      appendIfMissing:
+        hasLegacyLaunchdAssistant && ASSISTANT_NAME !== DEFAULT_ASSISTANT_NAME,
+    });
+    sanitizeInstalledLaunchdPlist();
+  }
   logger.info(
     { groupCount: Object.keys(registeredGroups).length },
     'State loaded',
@@ -149,12 +195,22 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     );
     if (fs.existsSync(templateFile)) {
       let content = fs.readFileSync(templateFile, 'utf-8');
-      if (ASSISTANT_NAME !== 'Henry') {
-        content = content.replace(/^# Henry$/m, `# ${ASSISTANT_NAME}`);
-        content = content.replace(/You are Henry/g, `You are ${ASSISTANT_NAME}`);
-      }
+      content = replaceAssistantIdentityInClaudeMd(content, ASSISTANT_NAME);
       fs.writeFileSync(groupMdFile, content);
       logger.info({ folder: group.folder }, 'Created CLAUDE.md from template');
+    }
+  }
+  const existingContent = fs.existsSync(groupMdFile)
+    ? fs.readFileSync(groupMdFile, 'utf-8')
+    : null;
+  if (existingContent !== null) {
+    const updatedContent = replaceAssistantIdentityInClaudeMd(
+      existingContent,
+      ASSISTANT_NAME,
+    );
+    if (updatedContent !== existingContent) {
+      fs.writeFileSync(groupMdFile, updatedContent);
+      logger.info({ folder: group.folder }, 'Updated CLAUDE.md assistant name');
     }
   }
 

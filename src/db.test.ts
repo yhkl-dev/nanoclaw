@@ -219,6 +219,26 @@ describe('getMessagesSince', () => {
     expect(botMsgs).toHaveLength(0);
   });
 
+  it('excludes legacy Andy-prefixed bot messages after rename to Henry', () => {
+    store({
+      id: 'm-andy',
+      chat_jid: 'group@g.us',
+      sender: 'bot@s.whatsapp.net',
+      sender_name: 'Bot',
+      content: 'Andy: legacy bot reply',
+      timestamp: '2024-01-01T00:00:05.000Z',
+      is_from_me: true,
+    });
+
+    const msgs = getMessagesSince(
+      'group@g.us',
+      '2024-01-01T00:00:00.000Z',
+      'Henry',
+    );
+
+    expect(msgs.map((m) => m.id)).not.toContain('m-andy');
+  });
+
   it('returns all non-bot messages when sinceTimestamp is empty', () => {
     const msgs = getMessagesSince('group@g.us', '', 'Henry');
     // 3 user messages (bot message excluded)
@@ -320,6 +340,7 @@ describe('getMessagesSince', () => {
       sender_name: 'Bot',
       content: 'Henry: old bot reply',
       timestamp: '2024-01-01T00:00:05.000Z',
+      is_from_me: true,
     });
     const msgs = getMessagesSince(
       'group@g.us',
@@ -327,6 +348,87 @@ describe('getMessagesSince', () => {
       'Henry',
     );
     expect(msgs).toHaveLength(0);
+  });
+
+  it('recovers cursor from legacy Andy-prefixed bot replies after rename', () => {
+    store({
+      id: 'legacy-bot',
+      chat_jid: 'group@g.us',
+      sender: 'bot@s.whatsapp.net',
+      sender_name: 'Bot',
+      content: 'Andy: old assistant reply',
+      timestamp: '2024-01-01T00:00:05.000Z',
+      is_from_me: true,
+    });
+    store({
+      id: 'after-legacy-bot',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'after old bot',
+      timestamp: '2024-01-01T00:00:06.000Z',
+    });
+
+    const recovered = getLastBotMessageTimestamp('group@g.us', 'Henry');
+    expect(recovered).toBe('2024-01-01T00:00:05.000Z');
+
+    const msgs = getMessagesSince('group@g.us', recovered!, 'Henry');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].id).toBe('after-legacy-bot');
+  });
+
+  it('does not drop user messages that happen to start with legacy assistant prefixes', () => {
+    store({
+      id: 'user-andy-prefix',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'Andy: please send this to Henry',
+      timestamp: '2024-01-01T00:00:05.000Z',
+      is_from_me: false,
+    });
+
+    const msgs = getMessagesSince(
+      'group@g.us',
+      '2024-01-01T00:00:04.000Z',
+      'Henry',
+    );
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].id).toBe('user-andy-prefix');
+  });
+});
+
+describe('getNewMessages legacy assistant compatibility', () => {
+  it('filters legacy Andy-prefixed bot messages from multi-chat polling', () => {
+    storeChatMetadata('group-a@g.us', '2024-01-01T00:00:00.000Z');
+    storeChatMetadata('group-b@g.us', '2024-01-01T00:00:00.000Z');
+
+    store({
+      id: 'user-a',
+      chat_jid: 'group-a@g.us',
+      sender: 'user-a@s.whatsapp.net',
+      sender_name: 'User A',
+      content: 'hello',
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+    store({
+      id: 'legacy-bot-b',
+      chat_jid: 'group-b@g.us',
+      sender: 'bot@s.whatsapp.net',
+      sender_name: 'Bot',
+      content: 'Andy: old reply',
+      timestamp: '2024-01-01T00:00:02.000Z',
+      is_from_me: true,
+    });
+
+    const result = getNewMessages(
+      ['group-a@g.us', 'group-b@g.us'],
+      '2024-01-01T00:00:00.000Z',
+      'Henry',
+    );
+
+    expect(result.messages.map((message) => message.id)).toEqual(['user-a']);
+    expect(result.newTimestamp).toBe('2024-01-01T00:00:01.000Z');
   });
 });
 

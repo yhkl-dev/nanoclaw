@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import { getAcceptedAssistantNames } from './assistant-name.js';
 import {
   ASSISTANT_NAME,
   DATA_DIR,
@@ -19,6 +20,19 @@ import {
 
 let db: Database.Database;
 const LEGACY_SESSIONS_MIGRATION_KEY = 'legacy_sessions_migrated_backend';
+
+function getAssistantMessagePrefixes(botPrefix: string): string[] {
+  return getAcceptedAssistantNames(botPrefix);
+}
+
+function buildMessagePrefixConditions(
+  prefixes: string[],
+): { sql: string; params: string[] } {
+  return {
+    sql: prefixes.map(() => 'content LIKE ?').join(' OR '),
+    params: prefixes.map((prefix) => `${prefix}:%`),
+  };
+}
 
 function createSchema(database: Database.Database): void {
   database.exec(`
@@ -117,13 +131,18 @@ function createSchema(database: Database.Database): void {
     database.exec(
       `ALTER TABLE messages ADD COLUMN is_bot_message INTEGER DEFAULT 0`,
     );
-    // Backfill: mark existing bot messages that used the content prefix pattern
-    database
-      .prepare(`UPDATE messages SET is_bot_message = 1 WHERE content LIKE ?`)
-      .run(`${ASSISTANT_NAME}:%`);
   } catch {
     /* column already exists */
   }
+  const prefixes = getAssistantMessagePrefixes(ASSISTANT_NAME);
+  const prefixConditions = buildMessagePrefixConditions(prefixes);
+  database
+    .prepare(
+      `UPDATE messages
+       SET is_bot_message = 1
+       WHERE is_bot_message = 0 AND is_from_me = 1 AND (${prefixConditions.sql})`,
+    )
+    .run(...prefixConditions.params);
 
   // Add is_main column if it doesn't exist (migration for existing DBs)
   try {
@@ -350,6 +369,7 @@ export function getNewMessages(
   if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
 
   const placeholders = jids.map(() => '?').join(',');
+  const messagePrefixes = getAssistantMessagePrefixes(botPrefix);
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   // Subquery takes the N most recent, outer query re-sorts chronologically.
@@ -358,7 +378,11 @@ export function getNewMessages(
       SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
       FROM messages
       WHERE timestamp > ? AND chat_jid IN (${placeholders})
-        AND is_bot_message = 0 AND content NOT LIKE ?
+        AND is_bot_message = 0
+        AND NOT (
+          is_from_me = 1
+          AND (${messagePrefixes.map(() => 'content LIKE ?').join(' OR ')})
+        )
         AND content != '' AND content IS NOT NULL
       ORDER BY timestamp DESC
       LIMIT ?
@@ -367,7 +391,12 @@ export function getNewMessages(
 
   const rows = db
     .prepare(sql)
-    .all(lastTimestamp, ...jids, `${botPrefix}:%`, limit) as NewMessage[];
+    .all(
+      lastTimestamp,
+      ...jids,
+      ...messagePrefixes.map((prefix) => `${prefix}:%`),
+      limit,
+    ) as NewMessage[];
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -383,6 +412,7 @@ export function getMessagesSince(
   botPrefix: string,
   limit: number = 200,
 ): NewMessage[] {
+  const messagePrefixes = getAssistantMessagePrefixes(botPrefix);
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   // Subquery takes the N most recent, outer query re-sorts chronologically.
@@ -391,7 +421,11 @@ export function getMessagesSince(
       SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
-        AND is_bot_message = 0 AND content NOT LIKE ?
+        AND is_bot_message = 0
+        AND NOT (
+          is_from_me = 1
+          AND (${messagePrefixes.map(() => 'content LIKE ?').join(' OR ')})
+        )
         AND content != '' AND content IS NOT NULL
       ORDER BY timestamp DESC
       LIMIT ?
@@ -399,19 +433,30 @@ export function getMessagesSince(
   `;
   return db
     .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
+    .all(
+      chatJid,
+      sinceTimestamp,
+      ...messagePrefixes.map((prefix) => `${prefix}:%`),
+      limit,
+    ) as NewMessage[];
 }
 
 export function getLastBotMessageTimestamp(
   chatJid: string,
   botPrefix: string,
 ): string | undefined {
+  const prefixConditions = buildMessagePrefixConditions(
+    getAssistantMessagePrefixes(botPrefix),
+  );
   const row = db
     .prepare(
       `SELECT MAX(timestamp) as ts FROM messages
-       WHERE chat_jid = ? AND (is_bot_message = 1 OR content LIKE ?)`,
+       WHERE chat_jid = ?
+         AND (is_bot_message = 1 OR (is_from_me = 1 AND ${prefixConditions.sql}))`,
     )
-    .get(chatJid, `${botPrefix}:%`) as { ts: string | null } | undefined;
+    .get(chatJid, ...prefixConditions.params) as
+    | { ts: string | null }
+    | undefined;
   return row?.ts ?? undefined;
 }
 
