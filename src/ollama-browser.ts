@@ -119,11 +119,15 @@ function buildBrowserTracePrefix(
   return parts.join(' | ');
 }
 
-function buildTracedBrowserExecScript(
-  commandSummary: { action: string; target?: string },
-): string {
+function buildTracedBrowserExecScript(commandSummary: {
+  action: string;
+  target?: string;
+}): string {
   const startPrefix = buildBrowserTracePrefix('browser_start', commandSummary);
-  const finishPrefix = buildBrowserTracePrefix('browser_finish', commandSummary);
+  const finishPrefix = buildBrowserTracePrefix(
+    'browser_finish',
+    commandSummary,
+  );
   return [
     `log_file=${shellQuote(BROWSER_TRACE_FILE)}`,
     `printf '%s %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ${shellQuote(startPrefix)} >> "$log_file"`,
@@ -221,7 +225,7 @@ function appendBrowserNetworkSandbox(lines: string[]): void {
     'command -v ip6tables >/dev/null 2>&1 || { echo "ip6tables is required for browser network sandbox" >&2; exit 1; }',
     'iptables -I OUTPUT -o lo -j ACCEPT',
     'ip6tables -I OUTPUT -o lo -j ACCEPT',
-    'dns_servers=$(awk \'/^nameserver / {print $2}\' /etc/resolv.conf)',
+    "dns_servers=$(awk '/^nameserver / {print $2}' /etc/resolv.conf)",
     '[ -n "$dns_servers" ] || { echo "No DNS resolvers found in /etc/resolv.conf" >&2; exit 1; }',
     [
       'for dns_server in $dns_servers; do',
@@ -273,7 +277,9 @@ async function runHackerNewsApiFallback(
   if (!isHackerNewsFrontPage(pageUrl)) {
     return undefined;
   }
-  const topStoriesUrl = new URL('https://hacker-news.firebaseio.com/v0/topstories.json');
+  const topStoriesUrl = new URL(
+    'https://hacker-news.firebaseio.com/v0/topstories.json',
+  );
   const topStories = await fetchJsonFromUrl(topStoriesUrl);
   if (!Array.isArray(topStories)) {
     throw new Error('Hacker News topstories response was not an array');
@@ -283,7 +289,9 @@ async function runHackerNewsApiFallback(
     .slice(0, HN_FALLBACK_STORY_LIMIT);
   const items = await Promise.all(
     itemIds.map(async (id) => {
-      const itemUrl = new URL(`https://hacker-news.firebaseio.com/v0/item/${id}.json`);
+      const itemUrl = new URL(
+        `https://hacker-news.firebaseio.com/v0/item/${id}.json`,
+      );
       const item = await fetchJsonFromUrl(itemUrl);
       return item as HackerNewsItem;
     }),
@@ -299,7 +307,8 @@ async function runHackerNewsApiFallback(
         item.url || `https://news.ycombinator.com/item?id=${item.id}`,
       );
       const author = compactWhitespace(item.by || 'unknown');
-      const score = typeof item.score === 'number' ? ` | score=${item.score}` : '';
+      const score =
+        typeof item.score === 'number' ? ` | score=${item.score}` : '';
       return `- ${index + 1}. ${title} -> ${href} | by=${author}${score}`;
     }),
   ];
@@ -314,7 +323,10 @@ function browserSessionKey(ctx: BrowserToolContext): string {
   return `${ctx.groupFolder}:${ctx.sessionId}`;
 }
 
-function browserSessionKeyFromIds(groupFolder: string, sessionId: string): string {
+function browserSessionKeyFromIds(
+  groupFolder: string,
+  sessionId: string,
+): string {
   return `${groupFolder}:${sessionId}`;
 }
 
@@ -323,8 +335,14 @@ function getBrowserRecoveryStateDir(groupFolder: string): string {
   return path.join(DATA_DIR, 'sessions', groupFolder, 'ollama-browser');
 }
 
-function getBrowserRecoveryStatePath(groupFolder: string, sessionId: string): string {
-  return path.join(getBrowserRecoveryStateDir(groupFolder), `${sessionId}.recovery.json`);
+function getBrowserRecoveryStatePath(
+  groupFolder: string,
+  sessionId: string,
+): string {
+  return path.join(
+    getBrowserRecoveryStateDir(groupFolder),
+    `${sessionId}.recovery.json`,
+  );
 }
 
 interface PersistedBrowserRecoveryState {
@@ -446,7 +464,10 @@ function getBrowserSessionRecoveryState(
   return persisted;
 }
 
-function markBrowserSessionRecovered(groupFolder: string, sessionId: string): void {
+function markBrowserSessionRecovered(
+  groupFolder: string,
+  sessionId: string,
+): void {
   saveBrowserRecoveryState(groupFolder, sessionId, {
     refsLost: true,
     historyLost: true,
@@ -469,8 +490,13 @@ function clearBrowserHistoryLoss(groupFolder: string, sessionId: string): void {
   });
 }
 
-function clearBrowserRecoveryState(groupFolder: string, sessionId: string): void {
-  browserSessionRecoveryState.delete(browserSessionKeyFromIds(groupFolder, sessionId));
+function clearBrowserRecoveryState(
+  groupFolder: string,
+  sessionId: string,
+): void {
+  browserSessionRecoveryState.delete(
+    browserSessionKeyFromIds(groupFolder, sessionId),
+  );
   clearPersistedBrowserRecoveryState(groupFolder, sessionId);
 }
 
@@ -491,7 +517,9 @@ function rememberBrowserUrl(
 }
 
 function forgetBrowserUrl(groupFolder: string, sessionId: string): void {
-  browserSessionLastUrls.delete(browserSessionKeyFromIds(groupFolder, sessionId));
+  browserSessionLastUrls.delete(
+    browserSessionKeyFromIds(groupFolder, sessionId),
+  );
   clearBrowserRecoveryState(groupFolder, sessionId);
 }
 
@@ -600,12 +628,13 @@ function parseBrowserHtmlFallbackOutput(output: string): {
   }
   const meta = output.slice(0, markerIndex);
   const body = output.slice(markerIndex + marker.length);
-  const resolvedUrl =
-    meta.match(/^__NANOCLAW_URL__=(.+)$/m)?.[1]?.trim() || '';
+  const resolvedUrl = meta.match(/^__NANOCLAW_URL__=(.+)$/m)?.[1]?.trim() || '';
   if (!resolvedUrl) {
     throw new Error('Browser HTML fallback output missing resolved URL');
   }
-  const contentType = meta.match(/^__NANOCLAW_CONTENT_TYPE__=(.+)$/m)?.[1]?.trim();
+  const contentType = meta
+    .match(/^__NANOCLAW_CONTENT_TYPE__=(.+)$/m)?.[1]
+    ?.trim();
   return {
     url: resolvedUrl,
     ...(contentType ? { contentType } : {}),
@@ -613,7 +642,9 @@ function parseBrowserHtmlFallbackOutput(output: string): {
   };
 }
 
-async function runBrowserHtmlFallback(url: URL): Promise<BrowserHtmlFallbackResult> {
+async function runBrowserHtmlFallback(
+  url: URL,
+): Promise<BrowserHtmlFallbackResult> {
   ensureContainerRuntimeRunning();
   const output = await dockerExec([
     'run',
@@ -640,7 +671,9 @@ async function runBrowserHtmlFallback(url: URL): Promise<BrowserHtmlFallbackResu
   };
 }
 
-async function runBrowserReadFallback(url: URL): Promise<BrowserHtmlFallbackResult> {
+async function runBrowserReadFallback(
+  url: URL,
+): Promise<BrowserHtmlFallbackResult> {
   try {
     return await runBrowserHtmlFallback(url);
   } catch (error) {
@@ -683,7 +716,7 @@ function isRecoverableBrowserCommandError(error: unknown): boolean {
   if (
     error &&
     typeof error === 'object' &&
-    (((error as { code?: string }).code === 'ETIMEDOUT') ||
+    ((error as { code?: string }).code === 'ETIMEDOUT' ||
       (error as { killed?: boolean }).killed === true)
   ) {
     return true;
@@ -767,7 +800,10 @@ async function restoreBrowserSessionIfPossible(
     return;
   }
   if (/^https?:\/\//i.test(rememberedUrl)) {
-    await assertSafeHttpDestination(new URL(rememberedUrl), OLLAMA_HTTP_ALLOW_PRIVATE);
+    await assertSafeHttpDestination(
+      new URL(rememberedUrl),
+      OLLAMA_HTTP_ALLOW_PRIVATE,
+    );
   }
   await dockerExec([
     'exec',
@@ -784,10 +820,10 @@ async function restoreRememberedBrowserUrl(
   groupFolder: string,
   sessionId: string,
   containerState: BrowserContainerState,
-): Promise<void> {
+): Promise<boolean> {
   const rememberedUrl = getRememberedBrowserUrl(groupFolder, sessionId);
   if (!rememberedUrl) {
-    return;
+    return false;
   }
   await restoreBrowserSessionIfPossible(
     containerState,
@@ -795,6 +831,29 @@ async function restoreRememberedBrowserUrl(
     rememberedUrl,
   );
   markBrowserSessionRecovered(groupFolder, sessionId);
+  return true;
+}
+
+async function restoreBrowserLandingPageIfNeeded(
+  groupFolder: string,
+  sessionId: string,
+  containerState: BrowserContainerState,
+): Promise<void> {
+  const restored = await restoreRememberedBrowserUrl(
+    groupFolder,
+    sessionId,
+    containerState,
+  );
+  if (!restored) {
+    return;
+  }
+  await getValidatedCurrentBrowserUrl(
+    groupFolder,
+    sessionId,
+    containerState,
+    false,
+    { preserveHistoryLoss: true },
+  );
 }
 
 async function tryReadLiveBrowserUrl(
@@ -959,7 +1018,8 @@ async function runBrowserCommand(
   } catch (error) {
     if (allowRecovery && isRecoverableBrowserCommandError(error)) {
       const liveUrl = await tryReadLiveBrowserUrl(activeContainerState);
-      let rememberedUrl = liveUrl || getRememberedBrowserUrl(groupFolder, sessionId);
+      let rememberedUrl =
+        liveUrl || getRememberedBrowserUrl(groupFolder, sessionId);
       logger.warn(
         {
           groupFolder,
@@ -974,7 +1034,10 @@ async function runBrowserCommand(
       if (rememberedUrl) {
         rememberBrowserUrl(groupFolder, sessionId, rememberedUrl);
       }
-      const recoveredState = await ensureBrowserContainer(groupFolder, sessionId);
+      const recoveredState = await ensureBrowserContainer(
+        groupFolder,
+        sessionId,
+      );
       await restoreBrowserSessionIfPossible(
         recoveredState,
         browserArgs,
@@ -992,21 +1055,21 @@ async function runBrowserCommand(
     throw error;
   } finally {
     logger.info(
-        {
-          groupFolder,
-          sessionId,
-          containerName: activeContainerState.containerName,
-          ...commandSummary,
-          success,
-          durationMs: Date.now() - startedAt,
-          sidecarReused: activeContainerState.reused,
-          sidecarLookupMs: activeContainerState.lookupMs,
-          ...(activeContainerState.reused
-            ? {}
-            : { sidecarStartupMs: activeContainerState.startupMs }),
-        },
-        'Browser command finished',
-      );
+      {
+        groupFolder,
+        sessionId,
+        containerName: activeContainerState.containerName,
+        ...commandSummary,
+        success,
+        durationMs: Date.now() - startedAt,
+        sidecarReused: activeContainerState.reused,
+        sidecarLookupMs: activeContainerState.lookupMs,
+        ...(activeContainerState.reused
+          ? {}
+          : { sidecarStartupMs: activeContainerState.startupMs }),
+      },
+      'Browser command finished',
+    );
   }
 }
 
@@ -1016,10 +1079,13 @@ async function getCurrentBrowserUrl(
   containerState?: BrowserContainerState,
   allowRecovery = true,
 ): Promise<string> {
-  const output = await runBrowserCommand(groupFolder, sessionId, [
-    'get',
-    'url',
-  ], containerState, allowRecovery);
+  const output = await runBrowserCommand(
+    groupFolder,
+    sessionId,
+    ['get', 'url'],
+    containerState,
+    allowRecovery,
+  );
   return output.trim();
 }
 
@@ -1046,16 +1112,18 @@ async function assertBrowserUrlSafe(
   }
   try {
     const parsedUrl = new URL(currentUrl);
-    if (parsedUrl.protocol === 'about:' && currentUrl.trim() === 'about:blank') {
+    if (
+      parsedUrl.protocol === 'about:' &&
+      currentUrl.trim() === 'about:blank'
+    ) {
       return;
     }
     if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-      throw new Error(`Blocked unsupported browser URL scheme: ${parsedUrl.protocol}`);
+      throw new Error(
+        `Blocked unsupported browser URL scheme: ${parsedUrl.protocol}`,
+      );
     }
-    await assertSafeHttpDestination(
-      parsedUrl,
-      OLLAMA_HTTP_ALLOW_PRIVATE,
-    );
+    await assertSafeHttpDestination(parsedUrl, OLLAMA_HTTP_ALLOW_PRIVATE);
   } catch (error) {
     await closeBrowserSession(groupFolder, sessionId);
     throw error;
@@ -1067,6 +1135,7 @@ async function getValidatedCurrentBrowserUrl(
   sessionId: string,
   containerState?: BrowserContainerState,
   allowRecovery = true,
+  options?: { preserveHistoryLoss?: boolean },
 ): Promise<string> {
   const previousRememberedUrl = getRememberedBrowserUrl(groupFolder, sessionId);
   const currentUrl = await getCurrentBrowserUrl(
@@ -1078,6 +1147,7 @@ async function getValidatedCurrentBrowserUrl(
   await assertBrowserUrlSafe(groupFolder, sessionId, currentUrl);
   const trimmedUrl = currentUrl.trim();
   if (
+    options?.preserveHistoryLoss !== true &&
     previousRememberedUrl &&
     previousRememberedUrl !== trimmedUrl &&
     getBrowserSessionRecoveryState(groupFolder, sessionId).historyLost
@@ -1191,10 +1261,7 @@ async function handleBrowserSnapshot(
   const args = parseObjectArgs(rawArgs);
   const rememberedUrl = getRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId);
   const containerName = browserContainerName(ctx.groupFolder, ctx.sessionId);
-  if (
-    rememberedUrl &&
-    !(await inspectContainerRunning(containerName))
-  ) {
+  if (rememberedUrl && !(await inspectContainerRunning(containerName))) {
     if (rememberedUrl === 'about:blank') {
       return buildBlankPageSnapshot();
     }
@@ -1255,7 +1322,11 @@ async function handleBrowserActionWithTarget(
     ctx.sessionId,
   );
   if (!containerState.reused) {
-    await restoreRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId, containerState);
+    await restoreBrowserLandingPageIfNeeded(
+      ctx.groupFolder,
+      ctx.sessionId,
+      containerState,
+    );
     if (isElementRefTarget(target)) {
       throw new Error(
         'Browser session was restored from the remembered URL. Re-run browser_snapshot before using element refs.',
@@ -1305,7 +1376,11 @@ async function handleBrowserTextEntry(
     ctx.sessionId,
   );
   if (!containerState.reused) {
-    await restoreRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId, containerState);
+    await restoreBrowserLandingPageIfNeeded(
+      ctx.groupFolder,
+      ctx.sessionId,
+      containerState,
+    );
     if (isElementRefTarget(target)) {
       throw new Error(
         'Browser session was restored from the remembered URL. Re-run browser_snapshot before using element refs.',
@@ -1352,7 +1427,11 @@ async function handleBrowserPress(
     ctx.sessionId,
   );
   if (!containerState.reused) {
-    await restoreRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId, containerState);
+    await restoreBrowserLandingPageIfNeeded(
+      ctx.groupFolder,
+      ctx.sessionId,
+      containerState,
+    );
   }
   await runBrowserCommand(
     ctx.groupFolder,
@@ -1388,7 +1467,11 @@ async function handleBrowserWait(
     ctx.sessionId,
   );
   if (!containerState.reused) {
-    await restoreRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId, containerState);
+    await restoreBrowserLandingPageIfNeeded(
+      ctx.groupFolder,
+      ctx.sessionId,
+      containerState,
+    );
     if (typeof args.target === 'string' && isElementRefTarget(args.target)) {
       throw new Error(
         'Browser session was restored from the remembered URL. Re-run browser_snapshot before using element refs.',
@@ -1424,7 +1507,11 @@ async function handleBrowserWait(
     containerState,
     false,
   );
-  return JSON.stringify({ ok: true, output: truncate(output || 'ok'), url }, null, 2);
+  return JSON.stringify(
+    { ok: true, output: truncate(output || 'ok'), url },
+    null,
+    2,
+  );
 }
 
 async function handleBrowserGet(
@@ -1465,7 +1552,11 @@ async function handleBrowserGet(
     ctx.sessionId,
   );
   if (!containerState.reused) {
-    await restoreRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId, containerState);
+    await restoreBrowserLandingPageIfNeeded(
+      ctx.groupFolder,
+      ctx.sessionId,
+      containerState,
+    );
     if (
       (field === 'text' || field === 'html' || field === 'value') &&
       typeof args.target === 'string' &&
@@ -1507,7 +1598,8 @@ async function handleBrowserNavigation(
   action: 'back' | 'forward' | 'reload',
 ): Promise<string> {
   if (
-    getBrowserSessionRecoveryState(ctx.groupFolder, ctx.sessionId).historyLost &&
+    getBrowserSessionRecoveryState(ctx.groupFolder, ctx.sessionId)
+      .historyLost &&
     action !== 'reload'
   ) {
     throw new Error(
@@ -1520,7 +1612,11 @@ async function handleBrowserNavigation(
   );
   if (!containerState.reused) {
     if (action === 'reload') {
-      await restoreRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId, containerState);
+      await restoreBrowserLandingPageIfNeeded(
+        ctx.groupFolder,
+        ctx.sessionId,
+        containerState,
+      );
     } else {
       throw new Error(
         'Browser history was lost when the browser session restarted. Re-open or navigate again before using browser_back or browser_forward.',
@@ -1562,7 +1658,11 @@ async function handleBrowserSelect(
     ctx.sessionId,
   );
   if (!containerState.reused) {
-    await restoreRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId, containerState);
+    await restoreBrowserLandingPageIfNeeded(
+      ctx.groupFolder,
+      ctx.sessionId,
+      containerState,
+    );
     if (isElementRefTarget(target)) {
       throw new Error(
         'Browser session was restored from the remembered URL. Re-run browser_snapshot before using element refs.',
@@ -1602,7 +1702,11 @@ async function handleBrowserScroll(
     ctx.sessionId,
   );
   if (!containerState.reused) {
-    await restoreRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId, containerState);
+    await restoreBrowserLandingPageIfNeeded(
+      ctx.groupFolder,
+      ctx.sessionId,
+      containerState,
+    );
   }
   await runBrowserCommand(
     ctx.groupFolder,
@@ -1639,7 +1743,11 @@ async function handleBrowserGetAttr(
     ctx.sessionId,
   );
   if (!containerState.reused) {
-    await restoreRememberedBrowserUrl(ctx.groupFolder, ctx.sessionId, containerState);
+    await restoreBrowserLandingPageIfNeeded(
+      ctx.groupFolder,
+      ctx.sessionId,
+      containerState,
+    );
     if (isElementRefTarget(target)) {
       throw new Error(
         'Browser session was restored from the remembered URL. Re-run browser_snapshot before using element refs.',

@@ -147,7 +147,7 @@ describe('ollama browser tools', () => {
       'ip6tables -I OUTPUT -o lo -j ACCEPT',
     );
     expect((runCall?.[1] as string[]).at(-1)).toContain(
-      'dns_servers=$(awk \'/^nameserver / {print $2}\' /etc/resolv.conf)',
+      "dns_servers=$(awk '/^nameserver / {print $2}' /etc/resolv.conf)",
     );
     expect((runCall?.[1] as string[]).at(-1)).toContain(
       '[ -n "$dns_servers" ] || { echo "No DNS resolvers found in /etc/resolv.conf" >&2; exit 1; }',
@@ -165,7 +165,7 @@ describe('ollama browser tools', () => {
       'command -v ip6tables >/dev/null 2>&1 || { echo "ip6tables is required for browser network sandbox" >&2; exit 1; }',
     );
     expect((runCall?.[1] as string[]).at(-1)).toContain(
-      'tail -n +1 -F \'/tmp/nanoclaw-browser-trace.log\' &',
+      "tail -n +1 -F '/tmp/nanoclaw-browser-trace.log' &",
     );
     expect((runCall?.[1] as string[]).at(-1)).toContain(
       'chmod 666 /tmp/nanoclaw-browser-trace.log',
@@ -174,7 +174,9 @@ describe('ollama browser tools', () => {
       'chown node:node /tmp/nanoclaw-browser-trace.log',
     );
     const startupScript = String((runCall?.[1] as string[]).at(-1));
-    expect(startupScript.indexOf('touch /tmp/nanoclaw-browser-ready')).toBeGreaterThan(
+    expect(
+      startupScript.indexOf('touch /tmp/nanoclaw-browser-ready'),
+    ).toBeGreaterThan(
       startupScript.indexOf('chown node:node /tmp/nanoclaw-browser-trace.log'),
     );
     expect(mockExecFile).toHaveBeenCalledWith(
@@ -261,7 +263,7 @@ describe('ollama browser tools', () => {
     expect(startupScript).toContain('iptables -I OUTPUT -o lo -j ACCEPT');
     expect(startupScript).toContain('ip6tables -I OUTPUT -o lo -j ACCEPT');
     expect(startupScript).toContain(
-      'dns_servers=$(awk \'/^nameserver / {print $2}\' /etc/resolv.conf)',
+      "dns_servers=$(awk '/^nameserver / {print $2}' /etc/resolv.conf)",
     );
   });
 
@@ -478,7 +480,7 @@ describe('ollama browser tools', () => {
           stdout?: string | Buffer,
           stderr?: string | Buffer,
         ) => void,
-        ) => {
+      ) => {
         if (args[0] === 'inspect') {
           inspectCalls += 1;
           if (inspectCalls === 1 || inspectCalls === 4) {
@@ -663,10 +665,16 @@ describe('ollama browser tools', () => {
         }
         if (args[0] === 'run') {
           return cb(
-            Object.assign(new Error('curl: (28) Connection timed out after 20002 milliseconds'), {
-              stderr: 'curl: (28) Connection timed out after 20002 milliseconds',
-              code: 28,
-            }),
+            Object.assign(
+              new Error(
+                'curl: (28) Connection timed out after 20002 milliseconds',
+              ),
+              {
+                stderr:
+                  'curl: (28) Connection timed out after 20002 milliseconds',
+                code: 28,
+              },
+            ),
           );
         }
         if (
@@ -727,7 +735,7 @@ describe('ollama browser tools', () => {
           stdout?: string | Buffer,
           stderr?: string | Buffer,
         ) => void,
-        ) => {
+      ) => {
         if (args[0] === 'inspect') {
           inspectCalls += 1;
           if (!openCompleted) {
@@ -1113,6 +1121,95 @@ describe('ollama browser tools', () => {
     });
   });
 
+  it('validates the restored landing URL before running selector actions', async () => {
+    const inspectResponses: Array<Error | string> = [
+      new Error('missing'),
+      'true\n',
+      'true\n',
+      new Error('missing'),
+    ];
+    let clickCalls = 0;
+    mockExecFile.mockImplementation(
+      (
+        _cmd: string,
+        args: string[],
+        _opts: unknown,
+        cb: (
+          error: Error | null,
+          stdout?: string | Buffer,
+          stderr?: string | Buffer,
+        ) => void,
+      ) => {
+        if (args[0] === 'inspect') {
+          const next = inspectResponses.shift();
+          if (next instanceof Error) {
+            return cb(next);
+          }
+          return cb(null, next ?? 'true\n', '');
+        }
+        if (args[0] === 'run' && args.includes('-d')) {
+          return cb(null, 'container-id\n', '');
+        }
+        if (args[0] === 'run') {
+          return cb(
+            null,
+            [
+              '__NANOCLAW_URL__=https://example.com/',
+              '__NANOCLAW_CONTENT_TYPE__=text/html',
+              '__NANOCLAW_BROWSER_BODY__',
+              '<html><head><title>Example Domain</title></head><body><button id="next">Next</button></body></html>',
+            ].join('\n'),
+            '',
+          );
+        }
+        if (
+          args[0] === 'exec' &&
+          args.at(-1) === 'test -f /tmp/nanoclaw-browser-ready'
+        ) {
+          return cb(null, '', '');
+        }
+        if (args[0] === 'exec' && args.at(-2) === 'open') {
+          return cb(
+            Object.assign(new Error('CDP command timed out: Page.navigate'), {
+              stderr: 'CDP command timed out: Page.navigate',
+            }),
+          );
+        }
+        if (
+          args[0] === 'exec' &&
+          args.at(-2) === 'get' &&
+          args.at(-1) === 'url'
+        ) {
+          return cb(null, 'http://127.0.0.1/private\n', '');
+        }
+        if (args[0] === 'exec' && args.at(-2) === 'click') {
+          clickCalls += 1;
+          return cb(null, '', '');
+        }
+        return cb(new Error(`unexpected exec: ${args.join(' ')}`));
+      },
+    );
+
+    await executeBrowserToolCall(
+      'browser_open',
+      { url: 'https://example.com' },
+      { groupFolder: 'main', sessionId: 'session-validate-before-click' },
+    );
+
+    await expect(
+      executeBrowserToolCall(
+        'browser_click',
+        { target: '#next' },
+        { groupFolder: 'main', sessionId: 'session-validate-before-click' },
+      ),
+    ).rejects.toThrow();
+
+    expect(clickCalls).toBe(0);
+    expect(mockStopContainer).toHaveBeenCalledWith(
+      'nanoclaw-browser-main-session-validate-before-click',
+    );
+  });
+
   it('persists recovery state when browser_press restores a fresh sidecar', async () => {
     const inspectResponses: Array<Error | string> = [
       new Error('missing'),
@@ -1276,6 +1373,86 @@ describe('ollama browser tools', () => {
     expect(backCalls).toBe(0);
   });
 
+  it('keeps lost history blocked when restore preflight only lands on a redirected URL', async () => {
+    let getTitleCalls = 0;
+    let backCalls = 0;
+    mockExecFile.mockImplementation(
+      (
+        _cmd: string,
+        args: string[],
+        _opts: unknown,
+        cb: (
+          error: Error | null,
+          stdout?: string | Buffer,
+          stderr?: string | Buffer,
+        ) => void,
+      ) => {
+        if (args[0] === 'inspect') return cb(null, 'true\n', '');
+        if (args[0] === 'run') return cb(null, 'container-id\n', '');
+        if (
+          args[0] === 'exec' &&
+          args.at(-1) === 'test -f /tmp/nanoclaw-browser-ready'
+        ) {
+          return cb(null, '', '');
+        }
+        if (args[0] === 'exec' && args.at(-2) === 'open') {
+          return cb(null, '', '');
+        }
+        if (
+          args[0] === 'exec' &&
+          args.at(-2) === 'get' &&
+          args.at(-1) === 'url'
+        ) {
+          return cb(null, 'https://example.com/home\n', '');
+        }
+        if (
+          args[0] === 'exec' &&
+          args.at(-2) === 'get' &&
+          args.at(-1) === 'title'
+        ) {
+          getTitleCalls += 1;
+          if (getTitleCalls === 1) {
+            return cb(
+              Object.assign(
+                new Error(
+                  'Could not configure browser: Failed to read: Resource temporarily unavailable (os error 11) (after 5 retries - daemon may be busy or unresponsive)',
+                ),
+                {
+                  stderr:
+                    'Could not configure browser: Failed to read: Resource temporarily unavailable (os error 11) (after 5 retries - daemon may be busy or unresponsive)',
+                },
+              ),
+            );
+          }
+          return cb(null, 'Example Domain\n', '');
+        }
+        if (args[0] === 'exec' && args.at(-1) === 'back') {
+          backCalls += 1;
+          return cb(null, '', '');
+        }
+        return cb(new Error(`unexpected exec: ${args.join(' ')}`));
+      },
+    );
+
+    expect(
+      await executeBrowserToolCall(
+        'browser_get_title',
+        {},
+        { groupFolder: 'main', sessionId: 'session-history-redirected-restore' },
+      ),
+    ).toBe('Example Domain');
+
+    await expect(
+      executeBrowserToolCall(
+        'browser_back',
+        {},
+        { groupFolder: 'main', sessionId: 'session-history-redirected-restore' },
+      ),
+    ).rejects.toThrow('Browser history was lost');
+
+    expect(backCalls).toBe(0);
+  });
+
   it('persists stale ref guards across process restarts while reusing the sidecar', async () => {
     let getTitleCalls = 0;
     let clickCalls = 0;
@@ -1435,7 +1612,9 @@ describe('ollama browser tools', () => {
         {},
         { groupFolder: 'main', sessionId: 'session-restart-history-loss' },
       ),
-    ).rejects.toThrow('Browser history was lost when the browser session restarted');
+    ).rejects.toThrow(
+      'Browser history was lost when the browser session restarted',
+    );
 
     expect(backCalls).toBe(0);
   });
@@ -1616,7 +1795,10 @@ describe('ollama browser tools', () => {
       await executeBrowserToolCall(
         'browser_get_title',
         {},
-        { groupFolder: 'main', sessionId: 'session-history-cleared-by-get-url' },
+        {
+          groupFolder: 'main',
+          sessionId: 'session-history-cleared-by-get-url',
+        },
       ),
     ).toBe('Example Domain');
 
@@ -1626,7 +1808,10 @@ describe('ollama browser tools', () => {
       await executeBrowserToolCall(
         'browser_get_url',
         {},
-        { groupFolder: 'main', sessionId: 'session-history-cleared-by-get-url' },
+        {
+          groupFolder: 'main',
+          sessionId: 'session-history-cleared-by-get-url',
+        },
       ),
     ).toBe('https://example.com/redirected');
 
@@ -1635,7 +1820,10 @@ describe('ollama browser tools', () => {
         await executeBrowserToolCall(
           'browser_back',
           {},
-          { groupFolder: 'main', sessionId: 'session-history-cleared-by-get-url' },
+          {
+            groupFolder: 'main',
+            sessionId: 'session-history-cleared-by-get-url',
+          },
         ),
       ),
     ).toEqual({
@@ -1654,7 +1842,10 @@ describe('ollama browser tools', () => {
       'main',
       'ollama-browser',
     );
-    const recoveryPath = path.join(recoveryDir, 'session-corrupt.recovery.json');
+    const recoveryPath = path.join(
+      recoveryDir,
+      'session-corrupt.recovery.json',
+    );
     fs.mkdirSync(recoveryDir, { recursive: true });
     fs.writeFileSync(recoveryPath, '{"refsLost":');
 
@@ -1832,7 +2023,7 @@ describe('ollama browser tools', () => {
           stdout?: string | Buffer,
           stderr?: string | Buffer,
         ) => void,
-        ) => {
+      ) => {
         if (args[0] === 'inspect') {
           inspectCalls += 1;
           return cb(null, 'true\n', '');
@@ -1854,7 +2045,8 @@ describe('ollama browser tools', () => {
           args.at(-1) === 'url'
         ) {
           getUrlCalls += 1;
-          if (getUrlCalls === 1) return cb(null, 'https://stale.example.com/\n', '');
+          if (getUrlCalls === 1)
+            return cb(null, 'https://stale.example.com/\n', '');
           if (getUrlCalls === 2) {
             return cb(
               Object.assign(
@@ -2200,7 +2392,8 @@ describe('ollama browser tools', () => {
         ) => void,
       ) => {
         if (args[0] === 'inspect') return cb(null, 'true\n', '');
-        if (args[0] === 'exec' && args.at(-1) === 'back') return cb(null, '', '');
+        if (args[0] === 'exec' && args.at(-1) === 'back')
+          return cb(null, '', '');
         if (
           args[0] === 'exec' &&
           args.at(-2) === 'get' &&
@@ -2251,7 +2444,8 @@ describe('ollama browser tools', () => {
         ) => void,
       ) => {
         if (args[0] === 'inspect') return cb(null, 'true\n', '');
-        if (args[0] === 'exec' && args.at(-1) === 'back') return cb(null, '', '');
+        if (args[0] === 'exec' && args.at(-1) === 'back')
+          return cb(null, '', '');
         if (
           args[0] === 'exec' &&
           args.at(-2) === 'get' &&
@@ -2328,8 +2522,10 @@ describe('ollama browser tools', () => {
         ) => void,
       ) => {
         if (args[0] === 'inspect') return cb(null, 'true\n', '');
-        if (args[0] === 'exec' && args.at(-3) === 'scroll') return cb(null, '', '');
-        if (args[0] === 'exec' && args.at(-3) === 'select') return cb(null, '', '');
+        if (args[0] === 'exec' && args.at(-3) === 'scroll')
+          return cb(null, '', '');
+        if (args[0] === 'exec' && args.at(-3) === 'select')
+          return cb(null, '', '');
         if (
           args[0] === 'exec' &&
           args.at(-2) === 'get' &&

@@ -56,8 +56,7 @@ describe('database migrations', () => {
         getSession,
         setSession,
         _closeDatabase,
-      } =
-        await import('./db.js');
+      } = await import('./db.js');
       const { MODEL_BACKEND } = await import('./config.js');
 
       initDatabase();

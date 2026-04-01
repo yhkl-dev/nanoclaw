@@ -305,7 +305,8 @@ describe('container-runner timeout behavior', () => {
           '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/skills' ||
         filePath ===
           '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents' ||
-        filePath === '/tmp/nanoclaw-test-data/sessions/test-group/agent-runner-src'
+        filePath ===
+          '/tmp/nanoclaw-test-data/sessions/test-group/agent-runner-src'
       );
     });
     vi.mocked(fs.readdirSync).mockImplementation((target) => {
@@ -338,7 +339,10 @@ describe('container-runner timeout behavior', () => {
           'session-recovery.test.ts',
         ] as unknown as ReturnType<typeof fs.readdirSync>;
       }
-      if (dirPath === '/tmp/nanoclaw-test-data/sessions/test-group/agent-runner-src') {
+      if (
+        dirPath ===
+        '/tmp/nanoclaw-test-data/sessions/test-group/agent-runner-src'
+      ) {
         return [
           'index.ts',
           'session-recovery.ts',
@@ -351,8 +355,7 @@ describe('container-runner timeout behavior', () => {
       (target) =>
         ({
           isDirectory: () =>
-            !String(target).endsWith('.md') &&
-            !String(target).endsWith('.ts'),
+            !String(target).endsWith('.md') && !String(target).endsWith('.ts'),
         }) as fs.Stats,
     );
 

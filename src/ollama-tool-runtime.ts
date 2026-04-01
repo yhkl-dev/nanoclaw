@@ -207,10 +207,7 @@ function getPooledAgent(
   return agent;
 }
 
-function hasHeader(
-  headers: Record<string, string>,
-  name: string,
-): boolean {
+function hasHeader(headers: Record<string, string>, name: string): boolean {
   const expected = name.toLowerCase();
   return Object.keys(headers).some((key) => key.toLowerCase() === expected);
 }
@@ -265,10 +262,7 @@ function parseCharset(contentType: string | null): string | undefined {
   return raw.replace(/^['"]|['"]$/g, '');
 }
 
-function decodeBodyBuffer(
-  buffer: Buffer,
-  contentType: string | null,
-): string {
+function decodeBodyBuffer(buffer: Buffer, contentType: string | null): string {
   const charset = parseCharset(contentType);
   if (charset) {
     try {
@@ -290,9 +284,11 @@ function summarizeJsonBody(value: unknown): Record<string, unknown> {
       kind: 'json',
       top_level: 'array',
       item_count: value.length,
-      sample_types: value.slice(0, 5).map((item) =>
-        Array.isArray(item) ? 'array' : item === null ? 'null' : typeof item,
-      ),
+      sample_types: value
+        .slice(0, 5)
+        .map((item) =>
+          Array.isArray(item) ? 'array' : item === null ? 'null' : typeof item,
+        ),
     };
   }
   if (value && typeof value === 'object') {
@@ -312,12 +308,15 @@ function summarizeJsonBody(value: unknown): Record<string, unknown> {
 }
 
 function summarizeHtmlBody(body: string): Record<string, unknown> {
-  const title = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+  const title = body
+    .match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
     ?.replace(/\s+/g, ' ')
     .trim();
-  const description = body.match(
-    /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i,
-  )?.[1]?.trim();
+  const description = body
+    .match(
+      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i,
+    )?.[1]
+    ?.trim();
   const text = compactText(
     body
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -377,13 +376,16 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isRetryableResponseStatus(status: number): boolean {
-  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+  return (
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504
+  );
 }
 
-function computeRetryDelayMs(
-  retryCount: number,
-  response?: Response,
-): number {
+function computeRetryDelayMs(retryCount: number, response?: Response): number {
   const header = response?.headers.get('retry-after');
   if (header) {
     const seconds = Number(header);
@@ -414,10 +416,18 @@ function classifyHttpError(error: unknown): HttpFailureCategory {
   }
   const code = getErrorCode(error);
   const message = error.message.toLowerCase();
-  if (code === 'ABORT_ERR' || message.includes('aborted') || message.includes('timeout')) {
+  if (
+    code === 'ABORT_ERR' ||
+    message.includes('aborted') ||
+    message.includes('timeout')
+  ) {
     return 'timeout';
   }
-  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || /\bdns\b|not found/i.test(error.message)) {
+  if (
+    code === 'ENOTFOUND' ||
+    code === 'EAI_AGAIN' ||
+    /\bdns\b|not found/i.test(error.message)
+  ) {
     return 'dns';
   }
   if (
@@ -647,7 +657,10 @@ function isIdempotentRetryMethod(method: string): boolean {
   return ['GET', 'HEAD', 'PUT', 'DELETE'].includes(method);
 }
 
-function getSafeUrlForLogs(rawUrl: string): { url_host?: string; url_path?: string } {
+function getSafeUrlForLogs(rawUrl: string): {
+  url_host?: string;
+  url_path?: string;
+} {
   try {
     const url = new URL(rawUrl);
     return {
@@ -744,15 +757,15 @@ async function fetchHttpWithRedirectChecks(
                 timeout_ms: HTTP_TOOL_TIMEOUT_MS,
                 redirect_count: redirectCount,
                 max_redirects: OLLAMA_HTTP_MAX_REDIRECTS,
-              resolved_addresses: resolved.addresses,
-              attempts: attemptedAddresses.length,
-              retry_count: retryCount,
-              attempted_addresses: attemptedAddresses,
-              final_address: pinned.address,
-              attempt_events: attemptEvents,
+                resolved_addresses: resolved.addresses,
+                attempts: attemptedAddresses.length,
+                retry_count: retryCount,
+                attempted_addresses: attemptedAddresses,
+                final_address: pinned.address,
+                attempt_events: attemptEvents,
+              },
             },
-          },
-        );
+          );
         }
         continue;
       }
@@ -815,8 +828,7 @@ async function fetchHttpWithRedirectChecks(
             const sameOrigin = nextUrl.origin === url.origin;
             return {
               ...init,
-              body:
-                redirectsToGet ? undefined : init.body,
+              body: redirectsToGet ? undefined : init.body,
               method: nextMethod,
               headers: sameOrigin
                 ? init.headers
@@ -937,9 +949,7 @@ async function runHttpRequestTool(args: unknown): Promise<string> {
   let body: string | undefined;
   if (rawBody !== undefined) {
     body =
-      typeof rawBody === 'string'
-        ? rawBody
-        : JSON.stringify(rawBody, null, 2);
+      typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody, null, 2);
   }
   const headers = applyDefaultHeaders(
     parsedUrl,
@@ -954,16 +964,14 @@ async function runHttpRequestTool(args: unknown): Promise<string> {
       ? Math.max(256, Math.min(50_000, Math.floor(parsed.max_chars)))
       : HTTP_TOOL_MAX_RESPONSE_CHARS;
 
-  const { response, rawText, truncated, telemetry } = await fetchHttpWithRedirectChecks(
-    parsedUrl,
-    {
+  const { response, rawText, truncated, telemetry } =
+    await fetchHttpWithRedirectChecks(parsedUrl, {
       method,
       headers,
       body: ['GET', 'HEAD'].includes(method) ? undefined : body,
       signal: createFetchTimeout(HTTP_TOOL_TIMEOUT_MS),
       __nanoclawMaxChars: maxChars,
-    } as RequestInit & { __nanoclawMaxChars: number },
-  );
+    } as RequestInit & { __nanoclawMaxChars: number });
 
   const responseHeaders: Record<string, string> = {};
   for (const [key, value] of response.headers.entries()) {
@@ -1101,10 +1109,7 @@ export async function executeOllamaToolCalls(
   const results: OllamaExecutedToolCall[] = [];
   let browserToolFailed = false;
   for (const toolCall of toolCalls) {
-    if (
-      browserToolFailed &&
-      toolCall.function.name.startsWith('browser_')
-    ) {
+    if (browserToolFailed && toolCall.function.name.startsWith('browser_')) {
       continue;
     }
     const startedAt = Date.now();

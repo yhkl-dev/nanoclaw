@@ -2,7 +2,12 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-import { ASSISTANT_NAME, DATA_DIR, MODEL_BACKEND, STORE_DIR } from './config.js';
+import {
+  ASSISTANT_NAME,
+  DATA_DIR,
+  MODEL_BACKEND,
+  STORE_DIR,
+} from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -165,9 +170,7 @@ function createSchema(database: Database.Database): void {
       )
       .run(MODEL_BACKEND);
     database
-      .prepare(
-        'INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)',
-      )
+      .prepare('INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)')
       .run(LEGACY_SESSIONS_MIGRATION_KEY, MODEL_BACKEND);
   }
 }
@@ -572,7 +575,10 @@ export function setRouterState(key: string, value: string): void {
 
 // --- Session accessors ---
 
-export function getSession(groupFolder: string, backend: string): string | undefined {
+export function getSession(
+  groupFolder: string,
+  backend: string,
+): string | undefined {
   const row = db
     .prepare(
       'SELECT session_id FROM backend_sessions WHERE group_folder = ? AND backend = ?',

@@ -434,7 +434,9 @@ function normalizeSummaryLines(lines: unknown): string[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function parseLegacySessionSummary(summary: string): OllamaSessionSummary | undefined {
+function parseLegacySessionSummary(
+  summary: string,
+): OllamaSessionSummary | undefined {
   const user: string[] = [];
   const assistant: string[] = [];
   for (const rawLine of summary.split('\n')) {
@@ -470,9 +472,7 @@ function normalizeSessionSummary(
   if (!summary || typeof summary !== 'object') {
     return undefined;
   }
-  const user = normalizeSummaryLines(
-    (summary as { user?: unknown }).user,
-  );
+  const user = normalizeSummaryLines((summary as { user?: unknown }).user);
   const assistant = normalizeSummaryLines(
     (summary as { assistant?: unknown }).assistant,
   );
@@ -486,12 +486,7 @@ function normalizeSessionSummary(
 }
 
 function summarizeSessionMessage(message: OllamaMessage): string {
-  return (
-    message.content
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 180) || '(empty)'
-  );
+  return message.content.replace(/\s+/g, ' ').trim().slice(0, 180) || '(empty)';
 }
 
 function trimSessionSummary(
@@ -572,7 +567,8 @@ function getToolCallSignature(toolCalls: OllamaToolCall[]): string {
 }
 
 function tokenizeAgentBrowserCommand(command: string): string[] {
-  const tokens = command.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+/g) || [];
+  const tokens =
+    command.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+/g) || [];
   return tokens.map((token) => {
     if (
       (token.startsWith('"') && token.endsWith('"')) ||
@@ -589,13 +585,16 @@ function inferToolRoutingHint(prompt: string): string | null {
   const looksLikeApiTask =
     /\b(api|json|rss|xml|endpoint|status code|response headers|robots\.txt|sitemap|feed|curl|head request)\b/i.test(
       normalized,
-    ) || /(接口|返回头|状态码|机器人协议|站点地图|订阅|JSON|XML|API)/i.test(prompt);
+    ) ||
+    /(接口|返回头|状态码|机器人协议|站点地图|订阅|JSON|XML|API)/i.test(prompt);
   const looksLikePageTask =
-    ((/(https?:\/\/\S+|www\.)/i.test(prompt) &&
+    (/(https?:\/\/\S+|www\.)/i.test(prompt) &&
       /\b(open|visit|browse|website|web page|homepage|article|headline|post|title|list|page|read)\b/i.test(
         normalized,
       )) ||
-      /(网页|网站|页面|首页|文章|新闻|帖子|标题|列表|访问|打开|读取)/.test(prompt));
+    /(网页|网站|页面|首页|文章|新闻|帖子|标题|列表|访问|打开|读取)/.test(
+      prompt,
+    );
 
   if (looksLikePageTask && !looksLikeApiTask) {
     return 'Routing hint: this is a webpage-reading task. Prefer browser_open plus browser_snapshot/browser_get_* over http_request unless the user explicitly wants raw headers, JSON, XML, or API output.';
@@ -766,7 +765,12 @@ function parseAgentBrowserCommand(command: string): OllamaToolCall | null {
           },
         };
       }
-      if (rest.length === 3 && normalizedFirstArg === 'attr' && rest[1] && rest[2]) {
+      if (
+        rest.length === 3 &&
+        normalizedFirstArg === 'attr' &&
+        rest[1] &&
+        rest[2]
+      ) {
         return {
           function: {
             name: 'browser_get_attr',
@@ -788,7 +792,9 @@ function parseAgentBrowserCommand(command: string): OllamaToolCall | null {
     case 'reload':
     case 'close':
       if (rest.length === 0) {
-        return { function: { name: `browser_${normalizedAction}`, arguments: {} } };
+        return {
+          function: { name: `browser_${normalizedAction}`, arguments: {} },
+        };
       }
       return null;
     case 'select':
@@ -1207,7 +1213,8 @@ export async function runDirectOllamaAgent(
         : [];
       const responseMessage: OllamaChatMessage = {
         role: parsed.message?.role === 'tool' ? 'assistant' : 'assistant',
-        content: repairedToolCalls.length > 0 ? '' : parsed.message?.content || '',
+        content:
+          repairedToolCalls.length > 0 ? '' : parsed.message?.content || '',
         tool_calls:
           repairedToolCalls.length > 0
             ? repairedToolCalls
@@ -1215,7 +1222,9 @@ export async function runDirectOllamaAgent(
       };
 
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-        const toolCallSignature = getToolCallSignature(responseMessage.tool_calls);
+        const toolCallSignature = getToolCallSignature(
+          responseMessage.tool_calls,
+        );
         repeatedToolCallCount =
           toolCallSignature === previousToolCallSignature
             ? repeatedToolCallCount + 1

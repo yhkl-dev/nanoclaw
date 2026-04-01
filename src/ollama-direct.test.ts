@@ -849,13 +849,15 @@ description: Software architecture specialist for system design decisions.
       user: ['u1', 'u2'],
       assistant: ['a1', 'a2'],
     });
-    expect(saved.messages).toEqual([
-      { role: 'assistant', content: 'a2' },
-      { role: 'user', content: 'u3' },
-      { role: 'assistant', content: 'a3' },
-      { role: 'user', content: 'u4' },
-      { role: 'assistant', content: '新的总结后回复。' },
-    ].slice(-mockedConfigFlags.ollamaSessionRecentMessages));
+    expect(saved.messages).toEqual(
+      [
+        { role: 'assistant', content: 'a2' },
+        { role: 'user', content: 'u3' },
+        { role: 'assistant', content: 'a3' },
+        { role: 'user', content: 'u4' },
+        { role: 'assistant', content: '新的总结后回复。' },
+      ].slice(-mockedConfigFlags.ollamaSessionRecentMessages),
+    );
   });
 
   it('archives overflow when configured recent history exceeds the hard cap', async () => {
@@ -902,7 +904,10 @@ description: Software architecture specialist for system design decisions.
     });
 
     const saved = JSON.parse(
-      fs.readFileSync(path.join(sessionDir, 'session-retain-cap.json'), 'utf-8'),
+      fs.readFileSync(
+        path.join(sessionDir, 'session-retain-cap.json'),
+        'utf-8',
+      ),
     );
     expect(saved.summary.user[0]).toBe('u1');
     expect(saved.summary.assistant[0]).toBe('a1');
@@ -1194,7 +1199,8 @@ description: Software architecture specialist for system design decisions.
       )
       .mockResolvedValueOnce({
         ok: true,
-        text: async () => JSON.stringify({ message: { role: 'assistant', content: 'ok' } }),
+        text: async () =>
+          JSON.stringify({ message: { role: 'assistant', content: 'ok' } }),
       } as Response);
 
     const group: RegisteredGroup = {
@@ -1546,7 +1552,10 @@ description: Software architecture specialist for system design decisions.
         ok: true,
         text: async () =>
           JSON.stringify({
-            message: { role: 'assistant', content: '我已经打开并查看了 Hacker News 首页。' },
+            message: {
+              role: 'assistant',
+              content: '我已经打开并查看了 Hacker News 首页。',
+            },
           }),
       } as Response);
 
@@ -1884,14 +1893,14 @@ description: Software architecture specialist for system design decisions.
     fetchMock.mockResolvedValue({
       ok: true,
       text: async () =>
-          JSON.stringify({
-            message: {
-              role: 'assistant',
-              content:
-                '<agent-browser screenshot />\n<internal>正在查看页面</internal>',
-            },
-          }),
-      } as Response);
+        JSON.stringify({
+          message: {
+            role: 'assistant',
+            content:
+              '<agent-browser screenshot />\n<internal>正在查看页面</internal>',
+          },
+        }),
+    } as Response);
 
     const group: RegisteredGroup = {
       name: 'Main',
@@ -2037,7 +2046,10 @@ description: Software architecture specialist for system design decisions.
                 {
                   function: {
                     name: 'http_request',
-                    arguments: { url: 'https://example.com/api', max_chars: 2000 },
+                    arguments: {
+                      url: 'https://example.com/api',
+                      max_chars: 2000,
+                    },
                   },
                 },
               ],
@@ -2056,7 +2068,10 @@ description: Software architecture specialist for system design decisions.
         ok: true,
         text: async () =>
           JSON.stringify({
-            message: { role: 'assistant', content: 'fallback http_request succeeded' },
+            message: {
+              role: 'assistant',
+              content: 'fallback http_request succeeded',
+            },
           }),
       } as Response);
 

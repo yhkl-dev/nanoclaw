@@ -348,13 +348,13 @@ async function runAgent(
 
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
-      ? async (output: ContainerOutput) => {
-          if (output.newSessionId) {
-            sessions[group.folder] = output.newSessionId;
-            setSession(group.folder, MODEL_BACKEND, output.newSessionId);
-          }
-          await onOutput(output);
+    ? async (output: ContainerOutput) => {
+        if (output.newSessionId) {
+          sessions[group.folder] = output.newSessionId;
+          setSession(group.folder, MODEL_BACKEND, output.newSessionId);
         }
+        await onOutput(output);
+      }
     : undefined;
 
   try {

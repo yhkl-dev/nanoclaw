@@ -89,7 +89,10 @@ describe('ollama tool runtime', () => {
     const results = await executeOllamaToolCalls(
       [
         {
-          function: { name: 'browser_open', arguments: { url: 'https://a.com' } },
+          function: {
+            name: 'browser_open',
+            arguments: { url: 'https://a.com' },
+          },
         },
         {
           function: { name: 'browser_snapshot', arguments: {} },
@@ -169,7 +172,10 @@ describe('ollama tool runtime', () => {
         {
           function: {
             name: 'http_request',
-            arguments: { url: 'https://example.com/api/weather', method: 'GET' },
+            arguments: {
+              url: 'https://example.com/api/weather',
+              method: 'GET',
+            },
           },
         },
       ],
@@ -222,7 +228,10 @@ describe('ollama tool runtime', () => {
             arguments: {
               url: 'https://example.com/items',
               method: 'POST',
-              headers: { 'User-Agent': 'CustomAgent/1.0', Accept: 'text/plain' },
+              headers: {
+                'User-Agent': 'CustomAgent/1.0',
+                Accept: 'text/plain',
+              },
               body: { hello: 'world' },
             },
           },
