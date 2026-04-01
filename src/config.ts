@@ -16,7 +16,11 @@ const envConfig = readEnvFile([
   'OLLAMA_ENABLE_HOST_SCRIPTS',
   'OLLAMA_HOST',
   'OLLAMA_HTTP_ALLOW_PRIVATE',
+  'OLLAMA_HTTP_MAX_REDIRECTS',
+  'OLLAMA_HTTP_TIMEOUT_MS',
   'OLLAMA_MODEL',
+  'OLLAMA_SESSION_RECENT_MESSAGES',
+  'OLLAMA_SESSION_SUMMARY_MAX_CHARS',
   'OLLAMA_THINK',
   'TZ',
   'WECOM_BOT_ID',
@@ -42,7 +46,43 @@ export const OLLAMA_HOST = process.env.OLLAMA_HOST || envConfig.OLLAMA_HOST;
 export const OLLAMA_HTTP_ALLOW_PRIVATE =
   (process.env.OLLAMA_HTTP_ALLOW_PRIVATE ||
     envConfig.OLLAMA_HTTP_ALLOW_PRIVATE) === 'true';
+export const OLLAMA_HTTP_MAX_REDIRECTS = Math.max(
+  0,
+  parseInt(
+    process.env.OLLAMA_HTTP_MAX_REDIRECTS ||
+      envConfig.OLLAMA_HTTP_MAX_REDIRECTS ||
+      '5',
+    10,
+  ) || 5,
+);
+export const OLLAMA_HTTP_TIMEOUT_MS = Math.max(
+  1_000,
+  parseInt(
+    process.env.OLLAMA_HTTP_TIMEOUT_MS ||
+      envConfig.OLLAMA_HTTP_TIMEOUT_MS ||
+      '20000',
+    10,
+  ) || 20_000,
+);
 export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || envConfig.OLLAMA_MODEL;
+export const OLLAMA_SESSION_RECENT_MESSAGES = Math.max(
+  2,
+  parseInt(
+    process.env.OLLAMA_SESSION_RECENT_MESSAGES ||
+      envConfig.OLLAMA_SESSION_RECENT_MESSAGES ||
+      '12',
+    10,
+  ) || 12,
+);
+export const OLLAMA_SESSION_SUMMARY_MAX_CHARS = Math.max(
+  256,
+  parseInt(
+    process.env.OLLAMA_SESSION_SUMMARY_MAX_CHARS ||
+      envConfig.OLLAMA_SESSION_SUMMARY_MAX_CHARS ||
+      '2000',
+    10,
+  ) || 2000,
+);
 // OLLAMA_THINK: set to 'true' to enable extended thinking for qwen3-style models.
 // Defaults to false because thinking mode makes tool calling unreliable.
 export const OLLAMA_THINK =

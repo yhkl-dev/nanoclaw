@@ -65,6 +65,24 @@ interface VolumeMount {
   readonly: boolean;
 }
 
+function buildContainerNoProxy(): string {
+  const entries = new Set(
+    [CONTAINER_HOST_GATEWAY, '127.0.0.1', 'localhost', '::1'].filter(Boolean),
+  );
+  for (const rawValue of [process.env.NO_PROXY, process.env.no_proxy]) {
+    if (!rawValue) {
+      continue;
+    }
+    for (const part of rawValue.split(',')) {
+      const trimmed = part.trim();
+      if (trimmed) {
+        entries.add(trimmed);
+      }
+    }
+  }
+  return Array.from(entries).join(',');
+}
+
 function syncDirectoryChildren(srcRoot: string, dstRoot: string): void {
   if (!fs.existsSync(srcRoot)) {
     return;
@@ -93,6 +111,23 @@ function syncFiles(srcRoot: string, dstRoot: string, extension?: string): void {
       continue;
     }
     fs.cpSync(srcPath, path.join(dstRoot, entry), { recursive: true });
+  }
+}
+
+function removeFilesBySuffix(root: string, suffix: string): void {
+  if (!fs.existsSync(root)) {
+    return;
+  }
+  for (const entry of fs.readdirSync(root)) {
+    const fullPath = path.join(root, entry);
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) {
+      removeFilesBySuffix(fullPath, suffix);
+      continue;
+    }
+    if (entry.endsWith(suffix)) {
+      fs.rmSync(fullPath, { force: true });
+    }
   }
 }
 
@@ -261,6 +296,7 @@ function buildVolumeMounts(
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
+    removeFilesBySuffix(groupAgentRunnerDir, '.test.ts');
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -328,6 +364,9 @@ function buildContainerArgs(
     args.push('-e', `HTTPS_PROXY=${CONTAINER_HTTP_PROXY}`);
     args.push('-e', `http_proxy=${CONTAINER_HTTP_PROXY}`);
     args.push('-e', `https_proxy=${CONTAINER_HTTP_PROXY}`);
+    const noProxy = buildContainerNoProxy();
+    args.push('-e', `NO_PROXY=${noProxy}`);
+    args.push('-e', `no_proxy=${noProxy}`);
   }
 
   // Runtime-specific args for host gateway resolution

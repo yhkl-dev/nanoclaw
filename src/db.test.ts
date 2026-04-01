@@ -5,12 +5,15 @@ import {
   createTask,
   deleteTask,
   getAllChats,
+  getAllSessions,
   getAllRegisteredGroups,
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
+  getSession,
   getTaskById,
   setRegisteredGroup,
+  setSession,
   storeChatMetadata,
   storeMessage,
   updateTask,
@@ -139,6 +142,18 @@ describe('storeMessage', () => {
     );
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toBe('updated');
+  });
+});
+
+describe('backend-scoped sessions', () => {
+  it('stores independent session ids per backend', () => {
+    setSession('main', 'claude', 'claude-session');
+    setSession('main', 'ollama', 'ollama-session');
+
+    expect(getSession('main', 'claude')).toBe('claude-session');
+    expect(getSession('main', 'ollama')).toBe('ollama-session');
+    expect(getAllSessions('claude')).toEqual({ main: 'claude-session' });
+    expect(getAllSessions('ollama')).toEqual({ main: 'ollama-session' });
   });
 });
 

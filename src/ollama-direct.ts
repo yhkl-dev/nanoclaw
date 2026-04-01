@@ -3,7 +3,6 @@ import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
-import { Agent } from 'undici';
 
 import {
   ASSISTANT_NAME,
@@ -14,17 +13,20 @@ import {
   OLLAMA_HOST,
   OLLAMA_HTTP_ALLOW_PRIVATE,
   OLLAMA_MODEL,
+  OLLAMA_SESSION_RECENT_MESSAGES,
+  OLLAMA_SESSION_SUMMARY_MAX_CHARS,
   OLLAMA_THINK,
 } from './config.js';
 import {
   closeBrowserSession,
-  executeBrowserToolCall,
-  getBrowserToolDefinitions,
+  resetOllamaBrowserTransientState,
 } from './ollama-browser.js';
+import { assertSafeHttpDestination } from './network-policy.js';
 import {
-  assertSafeHttpDestination,
-  resolveSafeHttpDestination,
-} from './network-policy.js';
+  executeOllamaToolCalls,
+  getOllamaToolDefinitions,
+  resetOllamaToolRuntimeState,
+} from './ollama-tool-runtime.js';
 import {
   assertValidGroupFolder,
   resolveGroupFolderPath,
@@ -32,15 +34,18 @@ import {
 import { logger } from './logger.js';
 import type { RegisteredGroup } from './types.js';
 import type { ContainerInput, ContainerOutput } from './container-runner.js';
+import type {
+  OllamaChatMessage,
+  OllamaChatResponse,
+  OllamaMessage,
+  OllamaToolCall,
+} from './ollama-types.js';
 
 const MAX_HISTORY_MESSAGES = 40;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 const OLLAMA_TOOL_MAX_ROUNDS = 8;
-const HTTP_TOOL_TIMEOUT_MS = 20_000;
-const HTTP_TOOL_MAX_RESPONSE_CHARS = 12_000;
-const HTTP_TOOL_MAX_DOWNLOAD_BYTES = HTTP_TOOL_MAX_RESPONSE_CHARS * 4; // stop streaming early
-const DNS_CACHE_TTL_MS = 60_000;
-const AGENT_POOL_TTL_MS = 60_000;
+const OLLAMA_REPEATED_TOOL_CALL_LIMIT = 3;
+const OLLAMA_REPEATED_FAILED_TOOL_LIMIT = 2;
 const SCRIPT_TIMEOUT_MS = 30_000;
 const MAX_ECC_SKILL_SUMMARY_ITEMS = 24;
 const MAX_ECC_AGENT_SUMMARY_ITEMS = 16;
@@ -52,209 +57,31 @@ const ASSISTANT_BROWSER_FALLBACK_MESSAGE =
   "I couldn't complete that browser request. The browser tool did not return usable page content.";
 const INTERNAL_BLOCK_PATTERN = /<internal>[\s\S]*?<\/internal>/gi;
 const AGENT_BROWSER_TAG_PATTERN = /<agent-browser\b[^>]*\/?>/gi;
-type PinnedFetchInit = RequestInit & { dispatcher?: unknown };
-
-interface DnsCacheEntry {
-  addresses: Array<{ address: string; family: number }>;
-  expiresAt: number;
-}
-const dnsCache = new Map<string, DnsCacheEntry>();
-
-interface AgentPoolEntry {
-  agent: Agent;
-  expiresAt: number;
-}
-const agentPool = new Map<string, AgentPoolEntry>();
+const AGENT_BROWSER_LINE_PATTERN = /^\s*agent-browser .*(?:\n|$)/gim;
 
 export function resetDirectOllamaTransientState(): void {
-  dnsCache.clear();
-  for (const entry of agentPool.values()) {
-    void entry.agent.close();
-  }
-  agentPool.clear();
+  resetOllamaBrowserTransientState();
+  resetOllamaToolRuntimeState();
 }
-
-function getPooledAgent(address: string, family: number): Agent {
-  const key = `${address}:${family}`;
-  const now = Date.now();
-  const entry = agentPool.get(key);
-  if (entry && entry.expiresAt > now) {
-    return entry.agent;
-  }
-  if (entry) {
-    void entry.agent.close();
-    agentPool.delete(key);
-  }
-  const pinnedAddress = address;
-  const pinnedFamily = family;
-  const agent = new Agent({
-    connect: {
-      lookup(_hostname, options, callback) {
-        if (options && (options as { all?: boolean }).all) {
-          (
-            callback as unknown as (
-              err: null,
-              addrs: Array<{ address: string; family: number }>,
-            ) => void
-          )(null, [{ address: pinnedAddress, family: pinnedFamily }]);
-        } else {
-          callback(null, pinnedAddress, pinnedFamily);
-        }
-      },
-    },
-    keepAliveTimeout: 30_000,
-    keepAliveMaxTimeout: 60_000,
-  });
-  agentPool.set(key, { agent, expiresAt: now + AGENT_POOL_TTL_MS });
-  return agent;
-}
-
-async function resolveSafeHttpDestinationCached(
-  url: URL,
-  allowPrivate: boolean,
-): Promise<{
-  hostname: string;
-  addresses: Array<{ address: string; family: number }>;
-}> {
-  const cacheKey = `${url.hostname}\0${allowPrivate ? '1' : '0'}`;
-  const now = Date.now();
-  const hit = dnsCache.get(cacheKey);
-  if (hit && hit.expiresAt > now) {
-    return { hostname: url.hostname, addresses: hit.addresses };
-  }
-  const resolved = await resolveSafeHttpDestination(url, allowPrivate);
-  dnsCache.set(cacheKey, {
-    addresses: resolved.addresses,
-    expiresAt: now + DNS_CACHE_TTL_MS,
-  });
-  return resolved;
-}
-
-async function readBodyWithLimit(
-  response: Response,
-  maxBytes: number,
-): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return await response.text();
-  }
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let totalBytes = 0;
-  let hitLimit = false;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done || !value) break;
-      chunks.push(decoder.decode(value, { stream: true }));
-      totalBytes += value.length;
-      if (totalBytes >= maxBytes) {
-        hitLimit = true;
-        await reader.cancel();
-        break;
-      }
-    }
-    chunks.push(decoder.decode());
-  } catch (error) {
-    await reader.cancel().catch(() => undefined);
-    if (!hitLimit) {
-      throw error;
-    }
-  }
-  return chunks.join('');
-}
-
-const HTTP_RETRYABLE_CONNECT_CODES = new Set([
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ENETUNREACH',
-  'EHOSTUNREACH',
-  'ETIMEDOUT',
-  'UND_ERR_CONNECT_TIMEOUT',
-]);
 
 function hostScriptsEnabled(): boolean {
   return OLLAMA_ENABLE_HOST_SCRIPTS;
 }
 
-function allowPrivateHttpRequests(): boolean {
-  return OLLAMA_HTTP_ALLOW_PRIVATE;
-}
-
-function isRetryableConnectError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  if (error.name === 'AbortError') {
-    return false;
-  }
-
-  const candidateCodes = [
-    (error as Error & { code?: string }).code,
-    (
-      error as Error & {
-        cause?: { code?: string };
-      }
-    ).cause?.code,
-  ];
-  if (
-    candidateCodes.some(
-      (code) => code && HTTP_RETRYABLE_CONNECT_CODES.has(code),
-    )
-  ) {
-    return true;
-  }
-
-  return /\bconnect (?:econnrefused|etimedout|ehostunreach|enetunreach)\b|network is unreachable|host is unreachable/i.test(
-    error.message,
-  );
-}
-
-interface OllamaMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-interface OllamaToolCall {
-  id?: string;
-  function: {
-    name: string;
-    arguments: unknown;
-  };
-}
-
-interface OllamaChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
-  tool_calls?: OllamaToolCall[];
-  tool_name?: string;
-}
-
-interface OllamaToolDefinition {
-  type: 'function';
-  function: {
-    name: string;
-    description: string;
-    parameters: {
-      type: 'object';
-      properties: Record<string, unknown>;
-      required?: string[];
-    };
-  };
-}
-
 interface OllamaSession {
+  summary?: OllamaSessionSummary | string;
   messages: OllamaMessage[];
   updatedAt: string;
 }
 
-interface OllamaChatResponse {
-  message?: {
-    role?: string;
-    content?: string;
-    tool_calls?: OllamaToolCall[];
-  };
-  error?: string;
+interface OllamaSessionSummary {
+  user?: string[];
+  assistant?: string[];
+}
+
+interface OllamaSessionState {
+  summary?: OllamaSessionSummary;
+  messages: OllamaMessage[];
 }
 
 interface ScriptResult {
@@ -551,6 +378,7 @@ function sanitizeAssistantContent(content: string): string {
   return content
     .replace(INTERNAL_BLOCK_PATTERN, '')
     .replace(AGENT_BROWSER_TAG_PATTERN, '')
+    .replace(AGENT_BROWSER_LINE_PATTERN, '')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
@@ -587,13 +415,477 @@ function sanitizeSessionMessages(messages: OllamaMessage[]): OllamaMessage[] {
   return sanitized;
 }
 
+function normalizeSummaryLine(line: unknown): string | undefined {
+  if (typeof line !== 'string') {
+    return undefined;
+  }
+  const normalized = line
+    .replace(/[\r\t]+/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+  return normalized || undefined;
+}
+
+function normalizeSummaryLines(lines: unknown): string[] | undefined {
+  const values = Array.isArray(lines) ? lines : [lines];
+  const normalized = values
+    .map((line) => normalizeSummaryLine(line))
+    .filter((line): line is string => Boolean(line));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function parseLegacySessionSummary(summary: string): OllamaSessionSummary | undefined {
+  const user: string[] = [];
+  const assistant: string[] = [];
+  for (const rawLine of summary.split('\n')) {
+    const line = normalizeSummaryLine(rawLine);
+    if (!line) {
+      continue;
+    }
+    const userMatch = line.match(/^user:\s*(.+)$/i);
+    if (userMatch) {
+      user.push(userMatch[1]!);
+      continue;
+    }
+    const assistantMatch = line.match(/^assistant:\s*(.+)$/i);
+    if (assistantMatch) {
+      assistant.push(assistantMatch[1]!);
+    }
+  }
+  if (user.length === 0 && assistant.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(user.length > 0 ? { user } : {}),
+    ...(assistant.length > 0 ? { assistant } : {}),
+  };
+}
+
+function normalizeSessionSummary(
+  summary: unknown,
+): OllamaSessionSummary | undefined {
+  if (typeof summary === 'string') {
+    return parseLegacySessionSummary(summary);
+  }
+  if (!summary || typeof summary !== 'object') {
+    return undefined;
+  }
+  const user = normalizeSummaryLines(
+    (summary as { user?: unknown }).user,
+  );
+  const assistant = normalizeSummaryLines(
+    (summary as { assistant?: unknown }).assistant,
+  );
+  if (!user && !assistant) {
+    return undefined;
+  }
+  return {
+    ...(user ? { user } : {}),
+    ...(assistant ? { assistant } : {}),
+  };
+}
+
+function summarizeSessionMessage(message: OllamaMessage): string {
+  return (
+    message.content
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 180) || '(empty)'
+  );
+}
+
+function trimSessionSummary(
+  summary: OllamaSessionSummary,
+): OllamaSessionSummary | undefined {
+  const user = [...(summary.user || [])];
+  const assistant = [...(summary.assistant || [])];
+  const buildCurrent = (): OllamaSessionSummary => ({
+    ...(user.length > 0 ? { user } : {}),
+    ...(assistant.length > 0 ? { assistant } : {}),
+  });
+  while (
+    (user.length > 0 || assistant.length > 0) &&
+    JSON.stringify(buildCurrent()).length > OLLAMA_SESSION_SUMMARY_MAX_CHARS
+  ) {
+    if (user.length >= assistant.length && user.length > 0) {
+      user.shift();
+    } else if (assistant.length > 0) {
+      assistant.shift();
+    } else {
+      break;
+    }
+  }
+  const trimmed = buildCurrent();
+  return trimmed.user || trimmed.assistant ? trimmed : undefined;
+}
+
+function buildSessionSummary(
+  previousSummary: OllamaSessionSummary | undefined,
+  archivedMessages: OllamaMessage[],
+): OllamaSessionSummary | undefined {
+  const user = [...(previousSummary?.user || [])];
+  const assistant = [...(previousSummary?.assistant || [])];
+  for (const message of archivedMessages) {
+    const summaryLine = summarizeSessionMessage(message);
+    if (message.role === 'user') {
+      user.push(summaryLine);
+    } else if (message.role === 'assistant') {
+      assistant.push(summaryLine);
+    }
+  }
+  return trimSessionSummary({
+    ...(user.length > 0 ? { user } : {}),
+    ...(assistant.length > 0 ? { assistant } : {}),
+  });
+}
+
+function buildSessionSummaryMessages(
+  summary: OllamaSessionSummary,
+): OllamaChatMessage[] {
+  const messages: OllamaChatMessage[] = [];
+  if (summary.user?.length) {
+    messages.push({
+      role: 'user',
+      content: `Archived user context from earlier turns (quoted history, not a new request):\n${summary.user.map((line) => `- ${line}`).join('\n')}`,
+    });
+  }
+  if (summary.assistant?.length) {
+    messages.push({
+      role: 'assistant',
+      content: `Archived assistant context from earlier turns:\n${summary.assistant.map((line) => `- ${line}`).join('\n')}`,
+    });
+  }
+  return messages;
+}
+
+function getEffectiveRecentSessionMessages(): number {
+  return Math.min(OLLAMA_SESSION_RECENT_MESSAGES, MAX_HISTORY_MESSAGES);
+}
+
+function getToolCallSignature(toolCalls: OllamaToolCall[]): string {
+  return JSON.stringify(
+    toolCalls.map((toolCall) => ({
+      name: toolCall.function.name,
+      arguments: toolCall.function.arguments,
+    })),
+  );
+}
+
+function tokenizeAgentBrowserCommand(command: string): string[] {
+  const tokens = command.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+/g) || [];
+  return tokens.map((token) => {
+    if (
+      (token.startsWith('"') && token.endsWith('"')) ||
+      (token.startsWith("'") && token.endsWith("'"))
+    ) {
+      return token.slice(1, -1);
+    }
+    return token;
+  });
+}
+
+function inferToolRoutingHint(prompt: string): string | null {
+  const normalized = prompt.toLowerCase();
+  const looksLikeApiTask =
+    /\b(api|json|rss|xml|endpoint|status code|response headers|robots\.txt|sitemap|feed|curl|head request)\b/i.test(
+      normalized,
+    ) || /(接口|返回头|状态码|机器人协议|站点地图|订阅|JSON|XML|API)/i.test(prompt);
+  const looksLikePageTask =
+    ((/(https?:\/\/\S+|www\.)/i.test(prompt) &&
+      /\b(open|visit|browse|website|web page|homepage|article|headline|post|title|list|page|read)\b/i.test(
+        normalized,
+      )) ||
+      /(网页|网站|页面|首页|文章|新闻|帖子|标题|列表|访问|打开|读取)/.test(prompt));
+
+  if (looksLikePageTask && !looksLikeApiTask) {
+    return 'Routing hint: this is a webpage-reading task. Prefer browser_open plus browser_snapshot/browser_get_* over http_request unless the user explicitly wants raw headers, JSON, XML, or API output.';
+  }
+  if (looksLikeApiTask && !looksLikePageTask) {
+    return 'Routing hint: this is an HTTP/API fetch task. Prefer http_request unless JavaScript execution or DOM interaction is explicitly required.';
+  }
+  return null;
+}
+
+function parseAgentBrowserCommand(command: string): OllamaToolCall | null {
+  const trimmed = command.trim();
+  const openAttr = trimmed.match(/^open\s*=\s*(["'])([^"'<>]+)\1$/i);
+  if (openAttr) {
+    return {
+      function: {
+        name: 'browser_open',
+        arguments: { url: openAttr[2] },
+      },
+    };
+  }
+
+  const tokens = tokenizeAgentBrowserCommand(trimmed);
+  if (tokens.length === 0) {
+    return null;
+  }
+  const [action, ...rest] = tokens;
+  const normalizedAction = action.toLowerCase();
+  const normalizedFirstArg = rest[0]?.toLowerCase();
+  switch (normalizedAction) {
+    case 'open':
+      if (rest.length === 1) {
+        return {
+          function: {
+            name: 'browser_open',
+            arguments: { url: rest[0] },
+          },
+        };
+      }
+      return null;
+    case 'snapshot': {
+      const args: Record<string, unknown> = {};
+      for (let index = 0; index < rest.length; index++) {
+        const token = rest[index];
+        if (token === '-i') args.interactive_only = true;
+        else if (token === '-c') args.compact = true;
+        else if (
+          token === '-d' &&
+          rest[index + 1] &&
+          /^\d+$/.test(rest[index + 1]!)
+        ) {
+          args.depth = Number(rest[++index]);
+        } else if (token === '-s' && rest[index + 1]) {
+          args.scope = rest[++index];
+        } else {
+          return null;
+        }
+      }
+      return { function: { name: 'browser_snapshot', arguments: args } };
+    }
+    case 'click':
+    case 'hover':
+    case 'check':
+    case 'uncheck':
+      if (rest.length === 1) {
+        return {
+          function: {
+            name: `browser_${normalizedAction}`,
+            arguments: { target: rest[0] },
+          },
+        };
+      }
+      return null;
+    case 'fill':
+    case 'type':
+      if (rest[0] && rest[1] !== undefined) {
+        return {
+          function: {
+            name: `browser_${normalizedAction}`,
+            arguments: { target: rest[0], text: rest.slice(1).join(' ') },
+          },
+        };
+      }
+      return null;
+    case 'press':
+      if (rest[0]) {
+        return {
+          function: {
+            name: 'browser_press',
+            arguments: { key: rest.join(' ') },
+          },
+        };
+      }
+      return null;
+    case 'wait':
+      if (normalizedFirstArg === '--text' && rest[1]) {
+        return {
+          function: {
+            name: 'browser_wait',
+            arguments: { text: rest.slice(1).join(' ') },
+          },
+        };
+      }
+      if (normalizedFirstArg === '--url' && rest.length === 2) {
+        return {
+          function: {
+            name: 'browser_wait',
+            arguments: { url_pattern: rest[1] },
+          },
+        };
+      }
+      if (normalizedFirstArg === '--load' && rest.length === 2) {
+        return {
+          function: {
+            name: 'browser_wait',
+            arguments: { load: rest[1] },
+          },
+        };
+      }
+      if (rest[0] && /^@/.test(rest[0])) {
+        if (rest.length !== 1) {
+          return null;
+        }
+        return {
+          function: {
+            name: 'browser_wait',
+            arguments: { target: rest[0] },
+          },
+        };
+      }
+      if (rest.length === 1 && rest[0] && /^\d+$/.test(rest[0])) {
+        return {
+          function: {
+            name: 'browser_wait',
+            arguments: { ms: Number(rest[0]) },
+          },
+        };
+      }
+      return null;
+    case 'get':
+      if (rest.length === 1 && normalizedFirstArg === 'title') {
+        return { function: { name: 'browser_get_title', arguments: {} } };
+      }
+      if (rest.length === 1 && normalizedFirstArg === 'url') {
+        return { function: { name: 'browser_get_url', arguments: {} } };
+      }
+      if (rest.length === 2 && normalizedFirstArg === 'text' && rest[1]) {
+        return {
+          function: {
+            name: 'browser_get_text',
+            arguments: { target: rest[1] },
+          },
+        };
+      }
+      if (rest.length === 2 && normalizedFirstArg === 'html' && rest[1]) {
+        return {
+          function: {
+            name: 'browser_get_html',
+            arguments: { target: rest[1] },
+          },
+        };
+      }
+      if (rest.length === 2 && normalizedFirstArg === 'value' && rest[1]) {
+        return {
+          function: {
+            name: 'browser_get_value',
+            arguments: { target: rest[1] },
+          },
+        };
+      }
+      if (rest.length === 3 && normalizedFirstArg === 'attr' && rest[1] && rest[2]) {
+        return {
+          function: {
+            name: 'browser_get_attr',
+            arguments: { target: rest[1], attribute: rest[2] },
+          },
+        };
+      }
+      if (normalizedFirstArg === 'count' && rest[1]) {
+        return {
+          function: {
+            name: 'browser_get_count',
+            arguments: { selector: rest.slice(1).join(' ') },
+          },
+        };
+      }
+      return null;
+    case 'back':
+    case 'forward':
+    case 'reload':
+    case 'close':
+      if (rest.length === 0) {
+        return { function: { name: `browser_${normalizedAction}`, arguments: {} } };
+      }
+      return null;
+    case 'select':
+      if (rest[0] && rest[1]) {
+        return {
+          function: {
+            name: 'browser_select',
+            arguments: { target: rest[0], value: rest.slice(1).join(' ') },
+          },
+        };
+      }
+      return null;
+    case 'scroll':
+      if (
+        rest[0] &&
+        (rest.length === 1 || (rest.length === 2 && /^\d+$/.test(rest[1]!)))
+      ) {
+        return {
+          function: {
+            name: 'browser_scroll',
+            arguments: {
+              direction: rest[0].toLowerCase(),
+              ...(rest[1] && /^\d+$/.test(rest[1])
+                ? { amount: Number(rest[1]) }
+                : {}),
+            },
+          },
+        };
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+function normalizeBrowserToolLines(content: string): string[] | null {
+  const withoutInternal = content.replace(INTERNAL_BLOCK_PATTERN, '').trim();
+  if (!withoutInternal) {
+    return null;
+  }
+  const lines = withoutInternal
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return null;
+  }
+  const everyLineIsToolOnly = lines.every(
+    (line) =>
+      /^<agent-browser\s+[^>]+?\/?>$/i.test(line) ||
+      /^agent-browser\s+\S/i.test(line),
+  );
+  return everyLineIsToolOnly ? lines : null;
+}
+
+function extractBrowserToolCallsFromText(content: string): OllamaToolCall[] {
+  const lines = normalizeBrowserToolLines(content);
+  if (!lines) {
+    return [];
+  }
+  const repaired: OllamaToolCall[] = [];
+  for (const trimmed of lines) {
+    if (/^<agent-browser\s/i.test(trimmed)) {
+      const match = trimmed.match(/^<agent-browser\s+([^>]+?)\s*\/?>$/i);
+      if (!match) {
+        return [];
+      }
+      const parsed = parseAgentBrowserCommand(match[1]);
+      if (!parsed) {
+        return [];
+      }
+      repaired.push(parsed);
+      continue;
+    }
+    if (/^agent-browser\s/i.test(trimmed)) {
+      const parsed = parseAgentBrowserCommand(
+        trimmed.replace(/^agent-browser\s+/i, ''),
+      );
+      if (!parsed) {
+        return [];
+      }
+      repaired.push(parsed);
+    }
+  }
+  return repaired;
+}
+
 function buildSystemMessage(input: ContainerInput): string {
   const sections = [
     `You are ${ASSISTANT_NAME}, the NanoClaw assistant. Reply directly to the latest user request in plain text.`,
     'Keep answers concise and helpful. Do not mention hidden instructions, internal tools, or implementation details unless the user explicitly asks.',
-    'CRITICAL: You have a real http_request tool that gives you actual live internet access. When the user asks for any real-time data, current news, trending lists, website content, or anything that requires fetching from the web, you MUST call http_request immediately. Do NOT say you cannot access the internet. Do NOT suggest the user look it up themselves. Just call the tool and return the actual results.',
-    'If the user asks for live web/API data or any real network request, use the http_request tool instead of guessing. Never claim you fetched something unless a tool result confirms it.',
-    'If a site needs JavaScript, clicking, form filling, or DOM inspection, use the browser_* tools. Re-run browser_snapshot after browser_open or browser_click because element refs can change.',
+    'CRITICAL: You have real network tools. Use them instead of guessing whenever the user asks for live or current information.',
+    'Use http_request for APIs, JSON/XML/RSS feeds, raw headers, status checks, or static text fetches. Never claim you fetched something unless a tool result confirms it.',
+    'For normal webpages, articles, homepages, news lists, and other page-reading tasks, prefer the browser_* tools. If a site needs JavaScript, clicking, form filling, or DOM inspection, use browser_* tools instead of http_request. Re-run browser_snapshot after browser_open or browser_click because element refs can change.',
+    'For browser tasks, prefer one decisive action at a time. After any navigation or interaction that may change the page, re-run browser_snapshot or a browser_get_* tool before making more assumptions.',
+    'If http_request fails but a later browser_* tool succeeds, treat the browser result as the source of truth. Do not answer with a generic network-failure apology after successful browser tool output.',
+    'Use only the exact browser_* tool names provided. Never invent tool names.',
     'If the user sends literal <agent-browser ...> tags, interpret them as instructions to use the matching browser_* tools. Do not echo those tags back to the user.',
     'Do not emit literal <agent-browser ...> tags. Use the browser_* tools instead.',
   ];
@@ -619,43 +911,58 @@ function buildSystemMessage(input: ContainerInput): string {
     sections.push(eccGuidance);
   }
 
+  const routingHint = inferToolRoutingHint(input.prompt);
+  if (routingHint) {
+    sections.push(routingHint);
+  }
+
   return sections.join('\n\n');
 }
 
 function loadSessionMessages(
   groupFolder: string,
   sessionId?: string,
-): OllamaMessage[] {
-  if (!sessionId) return [];
+): OllamaSessionState {
+  if (!sessionId) return { messages: [] };
   const sessionPath = getSessionPath(groupFolder, sessionId);
-  if (!fs.existsSync(sessionPath)) return [];
+  if (!fs.existsSync(sessionPath)) return { messages: [] };
   const raw = fs.readFileSync(sessionPath, 'utf-8');
   const parsed = JSON.parse(raw) as OllamaSession;
   if (!Array.isArray(parsed.messages)) {
-    return [];
+    return { messages: [] };
   }
   const sanitized = sanitizeSessionMessages(parsed.messages);
-  if (JSON.stringify(sanitized) !== JSON.stringify(parsed.messages)) {
+  const summary = normalizeSessionSummary(parsed.summary);
+  if (
+    JSON.stringify(sanitized) !== JSON.stringify(parsed.messages) ||
+    JSON.stringify(summary ?? null) !== JSON.stringify(parsed.summary ?? null)
+  ) {
     const payload: OllamaSession = {
+      ...(summary ? { summary } : {}),
       messages: sanitized,
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(sessionPath, JSON.stringify(payload, null, 2) + '\n');
   }
-  return sanitized;
+  return { summary, messages: sanitized };
 }
 
 function saveSessionMessages(
   groupFolder: string,
   sessionId: string,
+  previousSummary: OllamaSessionSummary | undefined,
   messages: OllamaMessage[],
 ): void {
   const sessionDir = getSessionDir(groupFolder);
   fs.mkdirSync(sessionDir, { recursive: true });
-  const trimmed =
-    sanitizeSessionMessages(messages).slice(-MAX_HISTORY_MESSAGES);
+  const sanitized = sanitizeSessionMessages(messages);
+  const recentMessageLimit = getEffectiveRecentSessionMessages();
+  const recent = sanitized.slice(-recentMessageLimit);
+  const archived = sanitized.slice(0, -recentMessageLimit);
+  const summary = buildSessionSummary(previousSummary, archived);
   const payload: OllamaSession = {
-    messages: trimmed,
+    ...(summary ? { summary } : {}),
+    messages: recent,
     updatedAt: new Date().toISOString(),
   };
   fs.writeFileSync(
@@ -670,268 +977,6 @@ function createFetchTimeout(timeoutMs: number): AbortSignal {
   return controller.signal;
 }
 
-function getOllamaTools(): OllamaToolDefinition[] {
-  return [
-    {
-      type: 'function',
-      function: {
-        name: 'http_request',
-        description:
-          'Make a real HTTP request to a URL and return the response status, headers, and text body snippet.',
-        parameters: {
-          type: 'object',
-          properties: {
-            url: {
-              type: 'string',
-              description: 'The full http or https URL to request.',
-            },
-            method: {
-              type: 'string',
-              description:
-                'HTTP method. One of GET, POST, PUT, PATCH, DELETE, or HEAD. Defaults to GET.',
-            },
-            headers: {
-              type: 'object',
-              description: 'Optional request headers as string values.',
-            },
-            body: {
-              type: 'string',
-              description:
-                'Optional request body for POST/PUT/PATCH/DELETE requests.',
-            },
-            max_chars: {
-              type: 'integer',
-              description:
-                'Maximum number of response body characters to return. Defaults to 12000.',
-            },
-          },
-          required: ['url'],
-        },
-      },
-    },
-    ...getBrowserToolDefinitions(),
-  ];
-}
-
-function parseToolArguments(raw: unknown): Record<string, unknown> {
-  if (typeof raw === 'string') {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('Tool arguments must be a JSON object');
-    }
-    return parsed as Record<string, unknown>;
-  }
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error('Tool arguments must be an object');
-  }
-  return raw as Record<string, unknown>;
-}
-
-function normalizeHeaders(raw: unknown): Record<string, string> {
-  if (raw === undefined) return {};
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error('headers must be an object');
-  }
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value === 'string') {
-      result[key] = value;
-    } else if (
-      typeof value === 'number' ||
-      typeof value === 'boolean' ||
-      value === null
-    ) {
-      result[key] = String(value);
-    } else {
-      throw new Error(`Invalid header value for ${key}`);
-    }
-  }
-  return result;
-}
-
-async function fetchHttpWithRedirectChecks(
-  url: URL,
-  init: RequestInit,
-  redirectCount = 0,
-): Promise<{
-  response: Response;
-  rawText: string;
-}> {
-  const resolved = await resolveSafeHttpDestinationCached(
-    url,
-    allowPrivateHttpRequests(),
-  );
-  const requestMethod = (init.method || 'GET').toUpperCase();
-  const canRetryPinnedAddress =
-    requestMethod === 'GET' || requestMethod === 'HEAD';
-  let lastError: unknown;
-  for (const pinned of resolved.addresses) {
-    const dispatcher = getPooledAgent(pinned.address, pinned.family);
-
-    try {
-      const requestInit = {
-        ...init,
-        redirect: 'manual',
-        dispatcher,
-      } as unknown as PinnedFetchInit;
-      let response: Response;
-      try {
-        response = await fetch(url, requestInit);
-      } catch (error) {
-        lastError = error;
-        if (!canRetryPinnedAddress || !isRetryableConnectError(error)) {
-          throw error;
-        }
-        continue;
-      }
-
-      if (
-        response.status >= 300 &&
-        response.status < 400 &&
-        response.headers.has('location')
-      ) {
-        if (redirectCount >= 5) {
-          throw new Error('Too many HTTP redirects');
-        }
-        const location = response.headers.get('location');
-        if (!location) {
-          throw new Error('HTTP redirect missing location header');
-        }
-        const nextUrl = new URL(location, url);
-        await assertSafeHttpDestination(nextUrl, allowPrivateHttpRequests());
-        await response.body?.cancel();
-        return fetchHttpWithRedirectChecks(
-          nextUrl,
-          {
-            ...init,
-            body:
-              response.status === 303 ||
-              ((response.status === 301 || response.status === 302) &&
-                init.method &&
-                init.method !== 'GET' &&
-                init.method !== 'HEAD')
-                ? undefined
-                : init.body,
-            method:
-              response.status === 303 ||
-              ((response.status === 301 || response.status === 302) &&
-                init.method &&
-                init.method !== 'GET' &&
-                init.method !== 'HEAD')
-                ? 'GET'
-                : init.method,
-          },
-          redirectCount + 1,
-        );
-      }
-
-      const rawText =
-        init.method === 'HEAD'
-          ? ''
-          : await readBodyWithLimit(response, HTTP_TOOL_MAX_DOWNLOAD_BYTES);
-      return { response, rawText };
-    } catch (error) {
-      lastError = error;
-      throw error;
-    }
-    // Agent is pooled — do NOT close it here
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error('HTTP request failed');
-}
-
-async function runHttpRequestTool(args: unknown): Promise<string> {
-  const parsed = parseToolArguments(args);
-  const url = parsed.url;
-  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
-    throw new Error('http_request requires an http or https url');
-  }
-  const parsedUrl = new URL(url);
-  await assertSafeHttpDestination(parsedUrl, allowPrivateHttpRequests());
-
-  const method =
-    typeof parsed.method === 'string' ? parsed.method.toUpperCase() : 'GET';
-  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(method)) {
-    throw new Error(`Unsupported HTTP method: ${method}`);
-  }
-
-  const headers = normalizeHeaders(parsed.headers);
-  let body: string | undefined;
-  if (parsed.body !== undefined) {
-    body =
-      typeof parsed.body === 'string'
-        ? parsed.body
-        : JSON.stringify(parsed.body, null, 2);
-  }
-
-  const maxChars =
-    typeof parsed.max_chars === 'number' && Number.isFinite(parsed.max_chars)
-      ? Math.max(256, Math.min(50_000, Math.floor(parsed.max_chars)))
-      : HTTP_TOOL_MAX_RESPONSE_CHARS;
-
-  const { response, rawText } = await fetchHttpWithRedirectChecks(parsedUrl, {
-    method,
-    headers,
-    body: ['GET', 'HEAD'].includes(method) ? undefined : body,
-    signal: createFetchTimeout(HTTP_TOOL_TIMEOUT_MS),
-  });
-
-  const responseHeaders: Record<string, string> = {};
-  for (const [key, value] of response.headers.entries()) {
-    responseHeaders[key] = value;
-  }
-
-  return JSON.stringify(
-    {
-      ok: response.ok,
-      status: response.status,
-      status_text: response.statusText,
-      url: response.url,
-      headers: responseHeaders,
-      body: rawText.slice(0, maxChars),
-      truncated: rawText.length > maxChars,
-    },
-    null,
-    2,
-  );
-}
-
-async function executeToolCall(
-  toolCall: OllamaToolCall,
-  context: { groupFolder: string; sessionId: string },
-): Promise<string> {
-  if (toolCall.function.name === 'http_request') {
-    try {
-      const result = await runHttpRequestTool(toolCall.function.arguments);
-      logger.warn(
-        { tool: 'http_request', args: toolCall.function.arguments },
-        'http_request tool executed',
-      );
-      return result;
-    } catch (err) {
-      logger.warn(
-        {
-          tool: 'http_request',
-          args: toolCall.function.arguments,
-          error: err instanceof Error ? err.message : String(err),
-        },
-        'http_request tool FAILED',
-      );
-      throw err;
-    }
-  }
-  if (toolCall.function.name.startsWith('browser_')) {
-    return executeBrowserToolCall(
-      toolCall.function.name,
-      toolCall.function.arguments,
-      context,
-    );
-  }
-  throw new Error(`Unsupported tool: ${toolCall.function.name}`);
-}
-
 async function chatWithOllama(
   messages: OllamaChatMessage[],
   timeoutMs: number,
@@ -943,7 +988,7 @@ async function chatWithOllama(
       model: OLLAMA_MODEL,
       stream: false,
       messages,
-      tools: getOllamaTools(),
+      tools: getOllamaToolDefinitions(),
       think: OLLAMA_THINK,
     }),
     signal: createFetchTimeout(timeoutMs),
@@ -1085,7 +1130,8 @@ export async function runDirectOllamaAgent(
   assertValidSessionId(sessionId);
   let completed = false;
   try {
-    const history = loadSessionMessages(group.folder, input.sessionId);
+    const sessionState = loadSessionMessages(group.folder, input.sessionId);
+    const history = sessionState.messages;
     const systemMessage = buildSystemMessage(input);
     const timeoutMs = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
     let prompt = input.prompt;
@@ -1127,6 +1173,9 @@ export async function runDirectOllamaAgent(
 
     const requestMessages: OllamaChatMessage[] = [
       { role: 'system', content: systemMessage },
+      ...(sessionState.summary
+        ? buildSessionSummaryMessages(sessionState.summary)
+        : []),
       ...history,
       userMessage,
     ];
@@ -1145,56 +1194,71 @@ export async function runDirectOllamaAgent(
     let assistantText = '';
     let hadToolSuccess = false;
     let hadToolFailure = false;
-    for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
+    let abortedForLoopGuard = false;
+    let loopGuardHistoryNote: string | undefined;
+    let previousToolCallSignature: string | undefined;
+    let repeatedToolCallCount = 0;
+    let previousFailedToolCallSignature: string | undefined;
+    let repeatedFailedToolCallCount = 0;
+    toolLoop: for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
       const parsed = await chatWithOllama(requestMessages, timeoutMs);
+      const repairedToolCalls = !parsed.message?.tool_calls?.length
+        ? extractBrowserToolCallsFromText(parsed.message?.content || '')
+        : [];
       const responseMessage: OllamaChatMessage = {
         role: parsed.message?.role === 'tool' ? 'assistant' : 'assistant',
-        content: parsed.message?.content || '',
-        tool_calls: parsed.message?.tool_calls,
+        content: repairedToolCalls.length > 0 ? '' : parsed.message?.content || '',
+        tool_calls:
+          repairedToolCalls.length > 0
+            ? repairedToolCalls
+            : parsed.message?.tool_calls,
       };
 
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+        const toolCallSignature = getToolCallSignature(responseMessage.tool_calls);
+        repeatedToolCallCount =
+          toolCallSignature === previousToolCallSignature
+            ? repeatedToolCallCount + 1
+            : 1;
+        previousToolCallSignature = toolCallSignature;
+        if (repeatedToolCallCount >= OLLAMA_REPEATED_TOOL_CALL_LIMIT) {
+          logger.warn(
+            {
+              group: group.name,
+              sessionId,
+              round,
+              repeatedToolCallCount,
+              toolCalls: responseMessage.tool_calls.map(
+                (call) => call.function.name,
+              ),
+            },
+            'Stopping repeated Ollama tool loop',
+          );
+          abortedForLoopGuard = true;
+          loopGuardHistoryNote =
+            'Previous attempt stopped after repeated identical tool calls made no progress.';
+          hadToolFailure = true;
+          assistantText =
+            "I couldn't complete that request because the model kept repeating the same tool actions without making progress.";
+          break toolLoop;
+        }
         logger.info(
           {
             group: group.name,
             toolCalls: responseMessage.tool_calls.map(
               (call) => call.function.name,
             ),
+            repairedFromText: repairedToolCalls.length > 0,
           },
           'Ollama requested tools',
         );
         requestMessages.push(responseMessage);
-        const toolResults = await Promise.all(
-          responseMessage.tool_calls.map(async (toolCall) => {
-            const startedAt = Date.now();
-            try {
-              const result = await executeToolCall(toolCall, {
-                groupFolder: group.folder,
-                sessionId,
-              });
-              return {
-                toolCall,
-                result,
-                success: true,
-                durationMs: Date.now() - startedAt,
-              };
-            } catch (error) {
-              return {
-                toolCall,
-                result: JSON.stringify(
-                  {
-                    ok: false,
-                    error:
-                      error instanceof Error ? error.message : String(error),
-                  },
-                  null,
-                  2,
-                ),
-                success: false,
-                durationMs: Date.now() - startedAt,
-              };
-            }
-          }),
+        const toolResults = await executeOllamaToolCalls(
+          responseMessage.tool_calls,
+          {
+            groupFolder: group.folder,
+            sessionId,
+          },
         );
         for (const { toolCall, result, success, durationMs } of toolResults) {
           if (success) {
@@ -1218,12 +1282,48 @@ export async function runDirectOllamaAgent(
             tool_name: toolCall.function.name,
           });
         }
+        const roundSucceeded = toolResults.some((result) => result.success);
+        const roundFailed = toolResults.some((result) => !result.success);
+        if (roundFailed && !roundSucceeded) {
+          repeatedFailedToolCallCount =
+            toolCallSignature === previousFailedToolCallSignature
+              ? repeatedFailedToolCallCount + 1
+              : 1;
+          previousFailedToolCallSignature = toolCallSignature;
+        } else {
+          repeatedFailedToolCallCount = 0;
+          previousFailedToolCallSignature = undefined;
+        }
+        if (repeatedFailedToolCallCount >= OLLAMA_REPEATED_FAILED_TOOL_LIMIT) {
+          logger.warn(
+            {
+              group: group.name,
+              sessionId,
+              round,
+              repeatedFailedToolCallCount,
+              toolCalls: responseMessage.tool_calls.map(
+                (call) => call.function.name,
+              ),
+            },
+            'Stopping Ollama tool loop after repeated failures',
+          );
+          abortedForLoopGuard = true;
+          loopGuardHistoryNote =
+            'Previous attempt stopped after repeated identical tool calls kept failing.';
+          assistantText =
+            "I couldn't complete that request because the required tool steps kept failing.";
+          break toolLoop;
+        }
         continue;
       }
 
       const rawAssistantText = responseMessage.content.trim();
       assistantText = sanitizeAssistantContent(rawAssistantText);
-      if (!assistantText && /<agent-browser\b/i.test(rawAssistantText)) {
+      if (
+        !assistantText &&
+        (/<agent-browser\b/i.test(rawAssistantText) ||
+          /^\s*agent-browser /im.test(rawAssistantText))
+      ) {
         assistantText = ASSISTANT_BROWSER_FALLBACK_MESSAGE;
       }
       break;
@@ -1236,12 +1336,17 @@ export async function runDirectOllamaAgent(
     // Do not persist tool-failure apology responses to session history.
     // If every tool call failed (and none succeeded), the assistant reply is
     // just an error apology that would poison future sessions.
-    const shouldPersist = !hadToolFailure || hadToolSuccess;
+    const persistedAssistantText =
+      abortedForLoopGuard && loopGuardHistoryNote
+        ? loopGuardHistoryNote
+        : assistantText;
+    const shouldPersist =
+      abortedForLoopGuard || !hadToolFailure || hadToolSuccess;
     if (shouldPersist) {
-      saveSessionMessages(group.folder, sessionId, [
+      saveSessionMessages(group.folder, sessionId, sessionState.summary, [
         ...history,
         userMessage,
-        { role: 'assistant', content: assistantText },
+        { role: 'assistant', content: persistedAssistantText },
       ]);
     }
 

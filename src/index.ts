@@ -86,7 +86,7 @@ function loadState(): void {
     logger.warn('Corrupted last_agent_timestamp in DB, resetting');
     lastAgentTimestamp = {};
   }
-  sessions = getAllSessions();
+  sessions = getAllSessions(MODEL_BACKEND);
   registeredGroups = getAllRegisteredGroups();
   logger.info(
     { groupCount: Object.keys(registeredGroups).length },
@@ -348,13 +348,13 @@ async function runAgent(
 
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
-    ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
+      ? async (output: ContainerOutput) => {
+          if (output.newSessionId) {
+            sessions[group.folder] = output.newSessionId;
+            setSession(group.folder, MODEL_BACKEND, output.newSessionId);
+          }
+          await onOutput(output);
         }
-        await onOutput(output);
-      }
     : undefined;
 
   try {
@@ -375,7 +375,7 @@ async function runAgent(
 
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
+      setSession(group.folder, MODEL_BACKEND, output.newSessionId);
     }
 
     if (output.status === 'error') {

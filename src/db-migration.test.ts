@@ -21,6 +21,10 @@ describe('database migrations', () => {
           name TEXT,
           last_message_time TEXT
         );
+        CREATE TABLE sessions (
+          group_folder TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL
+        );
       `);
       legacyDb
         .prepare(
@@ -37,11 +41,24 @@ describe('database migrations', () => {
           `INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)`,
         )
         .run('room@g.us', 'WhatsApp Group', '2024-01-01T00:00:02.000Z');
+      legacyDb
+        .prepare(
+          `INSERT INTO sessions (group_folder, session_id) VALUES (?, ?)`,
+        )
+        .run('main', 'legacy-session');
       legacyDb.close();
 
       vi.resetModules();
-      const { initDatabase, getAllChats, _closeDatabase } =
+      const {
+        initDatabase,
+        getAllChats,
+        getAllSessions,
+        getSession,
+        setSession,
+        _closeDatabase,
+      } =
         await import('./db.js');
+      const { MODEL_BACKEND } = await import('./config.js');
 
       initDatabase();
 
@@ -58,6 +75,11 @@ describe('database migrations', () => {
         channel: 'whatsapp',
         is_group: 1,
       });
+
+      expect(getAllSessions(MODEL_BACKEND)).toEqual({ main: 'legacy-session' });
+      expect(getSession('main', MODEL_BACKEND)).toBe('legacy-session');
+      setSession('main', 'claude', 'claude-session');
+      expect(getSession('main', 'claude')).toBe('claude-session');
 
       _closeDatabase();
     } finally {

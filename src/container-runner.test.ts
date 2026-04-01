@@ -10,7 +10,7 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 // Mock config
 vi.mock('./config.js', () => ({
   ANTHROPIC_MODEL: undefined,
-  CONTAINER_HTTP_PROXY: undefined,
+  CONTAINER_HTTP_PROXY: 'http://192.168.2.2:7890',
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
@@ -21,6 +21,8 @@ vi.mock('./config.js', () => ({
   MODEL_BACKEND: 'claude',
   OLLAMA_ADMIN_TOOLS: false,
   OLLAMA_HOST: undefined,
+  OLLAMA_HTTP_MAX_REDIRECTS: 5,
+  OLLAMA_HTTP_TIMEOUT_MS: 20_000,
   OLLAMA_MODEL: undefined,
   TIMEZONE: 'America/Los_Angeles',
 }));
@@ -50,6 +52,7 @@ vi.mock('fs', async () => {
       statSync: vi.fn(() => ({ isDirectory: () => false })),
       copyFileSync: vi.fn(),
       cpSync: vi.fn(),
+      rmSync: vi.fn(),
     },
   };
 });
@@ -267,6 +270,28 @@ describe('container-runner timeout behavior', () => {
     expect(result.newSessionId).toBe('session-456');
   });
 
+  it('bypasses the proxy for the host credential proxy address', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    fakeProc.emit('close', 1);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    const { spawn } = await import('child_process');
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      'docker',
+      expect.arrayContaining([
+        '-e',
+        'HTTP_PROXY=http://192.168.2.2:7890',
+        '-e',
+        'NO_PROXY=host.docker.internal,127.0.0.1,localhost,::1',
+        '-e',
+        'no_proxy=host.docker.internal,127.0.0.1,localhost,::1',
+      ]),
+      expect.any(Object),
+    );
+  });
+
   it('syncs everything-claude-code skills and agents into per-group claude dir', async () => {
     vi.mocked(fs.existsSync).mockImplementation((target) => {
       const filePath = String(target);
@@ -275,9 +300,12 @@ describe('container-runner timeout behavior', () => {
         filePath ===
           '/Users/yangkai/Documents/github.com/nanoclaw/container/skills' ||
         filePath ===
+          '/Users/yangkai/Documents/github.com/nanoclaw/container/agent-runner/src' ||
+        filePath ===
           '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/skills' ||
         filePath ===
-          '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents'
+          '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents' ||
+        filePath === '/tmp/nanoclaw-test-data/sessions/test-group/agent-runner-src'
       );
     });
     vi.mocked(fs.readdirSync).mockImplementation((target) => {
@@ -300,12 +328,31 @@ describe('container-runner timeout behavior', () => {
       ) {
         return ['architect.md'] as unknown as ReturnType<typeof fs.readdirSync>;
       }
+      if (
+        dirPath ===
+        '/Users/yangkai/Documents/github.com/nanoclaw/container/agent-runner/src'
+      ) {
+        return [
+          'index.ts',
+          'session-recovery.ts',
+          'session-recovery.test.ts',
+        ] as unknown as ReturnType<typeof fs.readdirSync>;
+      }
+      if (dirPath === '/tmp/nanoclaw-test-data/sessions/test-group/agent-runner-src') {
+        return [
+          'index.ts',
+          'session-recovery.ts',
+          'session-recovery.test.ts',
+        ] as unknown as ReturnType<typeof fs.readdirSync>;
+      }
       return [] as unknown as ReturnType<typeof fs.readdirSync>;
     });
     vi.mocked(fs.statSync).mockImplementation(
       (target) =>
         ({
-          isDirectory: () => !String(target).endsWith('.md'),
+          isDirectory: () =>
+            !String(target).endsWith('.md') &&
+            !String(target).endsWith('.ts'),
         }) as fs.Stats,
     );
 
@@ -328,6 +375,10 @@ describe('container-runner timeout behavior', () => {
       '/tmp/test-home/.claude/plugins/marketplaces/everything-claude-code/agents/architect.md',
       '/tmp/nanoclaw-test-data/sessions/test-group/.claude/agents/architect.md',
       { recursive: true },
+    );
+    expect(vi.mocked(fs.rmSync)).toHaveBeenCalledWith(
+      '/tmp/nanoclaw-test-data/sessions/test-group/agent-runner-src/session-recovery.test.ts',
+      { force: true },
     );
   });
 });

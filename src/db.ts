@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
+import { ASSISTANT_NAME, DATA_DIR, MODEL_BACKEND, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -13,6 +13,7 @@ import {
 } from './types.js';
 
 let db: Database.Database;
+const LEGACY_SESSIONS_MIGRATION_KEY = 'legacy_sessions_migrated_backend';
 
 function createSchema(database: Database.Database): void {
   database.exec(`
@@ -72,6 +73,12 @@ function createSchema(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS sessions (
       group_folder TEXT PRIMARY KEY,
       session_id TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS backend_sessions (
+      group_folder TEXT NOT NULL,
+      backend TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      PRIMARY KEY (group_folder, backend)
     );
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
@@ -145,6 +152,23 @@ function createSchema(database: Database.Database): void {
     );
   } catch {
     /* columns already exist */
+  }
+
+  const legacySessionsMigrated = database
+    .prepare('SELECT value FROM router_state WHERE key = ?')
+    .get(LEGACY_SESSIONS_MIGRATION_KEY) as { value: string } | undefined;
+  if (!legacySessionsMigrated) {
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO backend_sessions (group_folder, backend, session_id)
+         SELECT group_folder, ?, session_id FROM sessions`,
+      )
+      .run(MODEL_BACKEND);
+    database
+      .prepare(
+        'INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)',
+      )
+      .run(LEGACY_SESSIONS_MIGRATION_KEY, MODEL_BACKEND);
   }
 }
 
@@ -548,23 +572,31 @@ export function setRouterState(key: string, value: string): void {
 
 // --- Session accessors ---
 
-export function getSession(groupFolder: string): string | undefined {
+export function getSession(groupFolder: string, backend: string): string | undefined {
   const row = db
-    .prepare('SELECT session_id FROM sessions WHERE group_folder = ?')
-    .get(groupFolder) as { session_id: string } | undefined;
+    .prepare(
+      'SELECT session_id FROM backend_sessions WHERE group_folder = ? AND backend = ?',
+    )
+    .get(groupFolder, backend) as { session_id: string } | undefined;
   return row?.session_id;
 }
 
-export function setSession(groupFolder: string, sessionId: string): void {
+export function setSession(
+  groupFolder: string,
+  backend: string,
+  sessionId: string,
+): void {
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+    'INSERT OR REPLACE INTO backend_sessions (group_folder, backend, session_id) VALUES (?, ?, ?)',
+  ).run(groupFolder, backend, sessionId);
 }
 
-export function getAllSessions(): Record<string, string> {
+export function getAllSessions(backend: string): Record<string, string> {
   const rows = db
-    .prepare('SELECT group_folder, session_id FROM sessions')
-    .all() as Array<{ group_folder: string; session_id: string }>;
+    .prepare(
+      'SELECT group_folder, session_id FROM backend_sessions WHERE backend = ?',
+    )
+    .all(backend) as Array<{ group_folder: string; session_id: string }>;
   const result: Record<string, string> = {};
   for (const row of rows) {
     result[row.group_folder] = row.session_id;
@@ -708,7 +740,7 @@ function migrateJsonState(): void {
   > | null;
   if (sessions) {
     for (const [folder, sessionId] of Object.entries(sessions)) {
-      setSession(folder, sessionId);
+      setSession(folder, MODEL_BACKEND, sessionId);
     }
   }
 
