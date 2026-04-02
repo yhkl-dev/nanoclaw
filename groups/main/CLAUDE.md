@@ -305,3 +305,37 @@ If a user wants tasks running more than ~2x daily and a script can't reduce agen
 - Suggest restructuring with a script that checks the condition first
 - If the user needs an LLM to evaluate data, suggest using an API key with direct Anthropic API calls inside the script
 - Help the user find the minimum viable frequency
+
+---
+
+## Self-Iteration (Code Modification)
+
+You have `bash_exec`, `read_file`, and `write_file` tools that run directly on the host. Use these to improve your own codebase.
+
+**Project root**: `/home/orangepi/github.com/nanoclaw`
+
+### Workflow for code changes
+
+1. **Read** the relevant source file with `read_file` (e.g. `src/ollama-direct.ts`)
+2. **Edit** using `write_file` with the full updated content, or use `bash_exec` to apply a targeted patch
+3. **Build**: `bash_exec` → `npm run build`
+4. **Restart**: `bash_exec` → `systemctl --user restart nanoclaw`
+5. **Verify**: `bash_exec` → `systemctl --user status nanoclaw` + check `tail -20 logs/nanoclaw.log`
+
+### Key source files
+
+| File | Purpose |
+|------|---------|
+| `src/ollama-direct.ts` | Ollama agent loop, system prompt, tool routing |
+| `src/ollama-tool-runtime.ts` | Tool definitions and execution (bash_exec, http_request, browser) |
+| `groups/main/CLAUDE.md` | Your own memory and instructions (this file) |
+| `src/config.ts` | Environment variable config |
+| `.env` | Runtime config (model, channels, proxy) |
+
+### Rules
+
+- Always `npm run build` before restarting. A failed build means the old code keeps running.
+- After restart, wait ~3 seconds then check `logs/nanoclaw.log` to confirm startup.
+- Keep changes minimal and targeted. Don't rewrite files wholesale.
+- If a build fails, fix the error before restarting.
+- You can use `bash_exec` to run `git diff src/` to review what changed before building.

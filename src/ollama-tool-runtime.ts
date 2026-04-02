@@ -1,6 +1,10 @@
+import { execFile } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import { Agent, buildConnector } from 'undici';
 
 import {
+  OLLAMA_ADMIN_TOOLS,
   OLLAMA_HTTP_ALLOW_PRIVATE,
   OLLAMA_HTTP_MAX_REDIRECTS,
   OLLAMA_HTTP_TIMEOUT_MS,
@@ -101,7 +105,11 @@ interface AgentPoolEntry {
 export interface OllamaToolContext {
   groupFolder: string;
   sessionId: string;
+  isMain?: boolean;
+  projectRoot?: string;
 }
+
+const BASH_EXEC_TIMEOUT_MS = 60_000;
 
 export interface OllamaExecutedToolCall {
   toolCall: OllamaToolCall;
@@ -1048,6 +1056,60 @@ async function executeToolCall(
       context,
     );
   }
+  if (
+    toolCall.function.name === 'bash_exec' &&
+    OLLAMA_ADMIN_TOOLS &&
+    context.isMain
+  ) {
+    const { command } = toolCall.function.arguments as { command: string };
+    const cwd = context.projectRoot ?? process.cwd();
+    return new Promise((resolve) => {
+      execFile(
+        'bash',
+        ['-c', command],
+        { cwd, timeout: BASH_EXEC_TIMEOUT_MS, maxBuffer: 512 * 1024 },
+        (err, stdout, stderr) => {
+          const out = stdout.slice(0, 8000);
+          const errOut = stderr.slice(0, 2000);
+          if (err && !stdout) {
+            resolve(
+              JSON.stringify({ error: err.message, stderr: errOut }),
+            );
+          } else {
+            resolve(JSON.stringify({ stdout: out, stderr: errOut, exitCode: err?.code ?? 0 }));
+          }
+        },
+      );
+    });
+  }
+  if (
+    toolCall.function.name === 'write_file' &&
+    OLLAMA_ADMIN_TOOLS &&
+    context.isMain
+  ) {
+    const { file_path, content } = toolCall.function.arguments as {
+      file_path: string;
+      content: string;
+    };
+    const resolved = path.isAbsolute(file_path)
+      ? file_path
+      : path.join(context.projectRoot ?? process.cwd(), file_path);
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    fs.writeFileSync(resolved, content, 'utf-8');
+    return JSON.stringify({ ok: true, path: resolved });
+  }
+  if (
+    toolCall.function.name === 'read_file' &&
+    OLLAMA_ADMIN_TOOLS &&
+    context.isMain
+  ) {
+    const { file_path } = toolCall.function.arguments as { file_path: string };
+    const resolved = path.isAbsolute(file_path)
+      ? file_path
+      : path.join(context.projectRoot ?? process.cwd(), file_path);
+    const content = fs.readFileSync(resolved, 'utf-8');
+    return JSON.stringify({ content: content.slice(0, 12000) });
+  }
   throw new Error(`Unsupported tool: ${toolCall.function.name}`);
 }
 
@@ -1059,7 +1121,73 @@ export function resetOllamaToolRuntimeState(): void {
   agentPool.clear();
 }
 
-export function getOllamaToolDefinitions(): OllamaToolDefinition[] {
+export function getOllamaToolDefinitions(opts?: {
+  isMain?: boolean;
+}): OllamaToolDefinition[] {
+  const adminTools: OllamaToolDefinition[] =
+    OLLAMA_ADMIN_TOOLS && opts?.isMain
+      ? [
+          {
+            type: 'function',
+            function: {
+              name: 'bash_exec',
+              description:
+                'Run a bash command on the host. Working directory is the NanoClaw project root. Use for editing source files, running npm run build, restarting the service, or any shell task. Output is truncated to 8000 chars.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  command: {
+                    type: 'string',
+                    description: 'The bash command to run.',
+                  },
+                },
+                required: ['command'],
+              },
+            },
+          },
+          {
+            type: 'function',
+            function: {
+              name: 'write_file',
+              description:
+                'Write content to a file on the host. Use absolute paths or paths relative to the project root.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  file_path: {
+                    type: 'string',
+                    description: 'Absolute or project-relative file path.',
+                  },
+                  content: {
+                    type: 'string',
+                    description: 'Full file content to write.',
+                  },
+                },
+                required: ['file_path', 'content'],
+              },
+            },
+          },
+          {
+            type: 'function',
+            function: {
+              name: 'read_file',
+              description:
+                'Read a file from the host filesystem. Returns up to 12000 chars.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  file_path: {
+                    type: 'string',
+                    description: 'Absolute or project-relative file path.',
+                  },
+                },
+                required: ['file_path'],
+              },
+            },
+          },
+        ]
+      : [];
+
   return [
     {
       type: 'function',
@@ -1099,6 +1227,7 @@ export function getOllamaToolDefinitions(): OllamaToolDefinition[] {
       },
     },
     ...getBrowserToolDefinitions(),
+    ...adminTools,
   ];
 }
 

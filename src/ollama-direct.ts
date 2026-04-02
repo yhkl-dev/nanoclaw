@@ -16,6 +16,7 @@ import {
   OLLAMA_SESSION_RECENT_MESSAGES,
   OLLAMA_SESSION_SUMMARY_MAX_CHARS,
   OLLAMA_THINK,
+  PROJECT_ROOT,
 } from './config.js';
 import {
   closeBrowserSession,
@@ -986,6 +987,7 @@ function createFetchTimeout(timeoutMs: number): AbortSignal {
 async function chatWithOllama(
   messages: OllamaChatMessage[],
   timeoutMs: number,
+  opts?: { isMain?: boolean },
 ): Promise<OllamaChatResponse> {
   const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
     method: 'POST',
@@ -994,7 +996,7 @@ async function chatWithOllama(
       model: OLLAMA_MODEL,
       stream: false,
       messages,
-      tools: getOllamaToolDefinitions(),
+      tools: getOllamaToolDefinitions({ isMain: opts?.isMain }),
       think: OLLAMA_THINK,
     }),
     signal: createFetchTimeout(timeoutMs),
@@ -1207,7 +1209,9 @@ export async function runDirectOllamaAgent(
     let previousFailedToolCallSignature: string | undefined;
     let repeatedFailedToolCallCount = 0;
     toolLoop: for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
-      const parsed = await chatWithOllama(requestMessages, timeoutMs);
+      const parsed = await chatWithOllama(requestMessages, timeoutMs, {
+        isMain: input.isMain,
+      });
       const repairedToolCalls = !parsed.message?.tool_calls?.length
         ? extractBrowserToolCallsFromText(parsed.message?.content || '')
         : [];
@@ -1267,6 +1271,8 @@ export async function runDirectOllamaAgent(
           {
             groupFolder: group.folder,
             sessionId,
+            isMain: input.isMain,
+            projectRoot: PROJECT_ROOT,
           },
         );
         for (const { toolCall, result, success, durationMs } of toolResults) {
