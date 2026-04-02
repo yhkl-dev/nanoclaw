@@ -16,6 +16,12 @@ vi.mock('./config.js', () => ({
   OLLAMA_HTTP_ALLOW_PRIVATE: false,
   OLLAMA_HTTP_MAX_REDIRECTS: 5,
   OLLAMA_HTTP_TIMEOUT_MS: 20_000,
+  OLLAMA_ADMIN_TOOLS: false,
+  OUTBOUND_HTTPS_PROXY: undefined,
+  TAVILY_API_KEY: undefined,
+  GITHUB_TOKEN: undefined,
+  BARK_KEY: undefined,
+  BARK_URL: 'https://api.day.app',
 }));
 
 vi.mock('./ollama-browser.js', () => ({

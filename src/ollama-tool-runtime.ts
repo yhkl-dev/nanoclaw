@@ -13,6 +13,9 @@ import {
   OLLAMA_HTTP_TIMEOUT_MS,
   OUTBOUND_HTTPS_PROXY,
   TAVILY_API_KEY,
+  GITHUB_TOKEN,
+  BARK_KEY,
+  BARK_URL,
 } from './config.js';
 import {
   executeBrowserToolCall,
@@ -1305,6 +1308,20 @@ async function executeToolCall(
       toolCall.function.arguments as Record<string, unknown>,
     );
   }
+  if (toolCall.function.name === 'system_stats') {
+    return executeSystemStats();
+  }
+  if (toolCall.function.name.startsWith('github_')) {
+    return executeGithubTool(
+      toolCall.function.name,
+      toolCall.function.arguments as Record<string, unknown>,
+    );
+  }
+  if (toolCall.function.name === 'bark_push') {
+    return executeBarkPush(
+      toolCall.function.arguments as Record<string, unknown>,
+    );
+  }
   throw new Error(`Unsupported tool: ${toolCall.function.name}`);
 }
 
@@ -1532,9 +1549,9 @@ async function executeTavilySearch(
   }
   const query = typeof args.query === 'string' ? args.query : '';
   if (!query) throw new Error('query is required');
-  const maxResults = typeof args.max_results === 'number' ? args.max_results : 5;
-  const searchDepth =
-    args.search_depth === 'advanced' ? 'advanced' : 'basic';
+  const maxResults =
+    typeof args.max_results === 'number' ? args.max_results : 5;
+  const searchDepth = args.search_depth === 'advanced' ? 'advanced' : 'basic';
   const includeAnswer = args.include_answer !== false;
 
   const proxyOpts: RequestInit & { agent?: unknown } = {};
@@ -1579,6 +1596,255 @@ async function executeTavilySearch(
     query,
   });
 }
+
+// ── System Stats ─────────────────────────────────────────────────────────────
+
+async function executeSystemStats(): Promise<string> {
+  const { promisify } = await import('util');
+  const execFileAsync = promisify(execFile);
+
+  const run = async (cmd: string, args: string[]): Promise<string> => {
+    try {
+      const { stdout } = await execFileAsync(cmd, args, { timeout: 5000 });
+      return stdout.trim();
+    } catch {
+      return '';
+    }
+  };
+
+  const [cpuInfo, memInfo, diskInfo, uptimeInfo, tempInfo, loadInfo] =
+    await Promise.all([
+      run('cat', ['/proc/cpuinfo']),
+      run('cat', ['/proc/meminfo']),
+      run('df', ['-h', '--output=source,size,used,avail,pcent,target', '-x', 'tmpfs', '-x', 'devtmpfs']),
+      run('cat', ['/proc/uptime']),
+      run('cat', ['/sys/class/thermal/thermal_zone0/temp']),
+      run('cat', ['/proc/loadavg']),
+    ]);
+
+  // Parse memory
+  const memLines: Record<string, number> = {};
+  for (const line of memInfo.split('\n')) {
+    const m = line.match(/^(\w+):\s+(\d+)/);
+    if (m) memLines[m[1]] = parseInt(m[2]);
+  }
+  const totalMem = Math.round((memLines['MemTotal'] ?? 0) / 1024);
+  const freeMem = Math.round(((memLines['MemFree'] ?? 0) + (memLines['Buffers'] ?? 0) + (memLines['Cached'] ?? 0)) / 1024);
+  const usedMem = totalMem - freeMem;
+
+  // Parse CPU model
+  const cpuModel = cpuInfo.match(/Hardware\s*:\s*(.+)/)?.[1] ||
+    cpuInfo.match(/model name\s*:\s*(.+)/)?.[1] ||
+    cpuInfo.match(/Processor\s*:\s*(.+)/)?.[1] || 'unknown';
+  const cpuCores = (cpuInfo.match(/^processor/gm) ?? []).length;
+
+  // Uptime
+  const uptimeSec = parseFloat(uptimeInfo.split(' ')[0] ?? '0');
+  const uptimeDays = Math.floor(uptimeSec / 86400);
+  const uptimeHrs = Math.floor((uptimeSec % 86400) / 3600);
+  const uptimeMins = Math.floor((uptimeSec % 3600) / 60);
+  const uptimeStr = `${uptimeDays}d ${uptimeHrs}h ${uptimeMins}m`;
+
+  // CPU temperature
+  const tempRaw = parseInt(tempInfo || '0');
+  const tempC = tempRaw > 1000 ? (tempRaw / 1000).toFixed(1) : tempRaw.toString();
+
+  // Load average
+  const [load1, load5, load15] = (loadInfo || '').split(' ');
+
+  return JSON.stringify({
+    cpu: { model: cpuModel.trim(), cores: cpuCores, load_1m: load1, load_5m: load5, load_15m: load15 },
+    memory: { total_mb: totalMem, used_mb: usedMem, free_mb: freeMem, usage_pct: Math.round((usedMem / totalMem) * 100) },
+    temperature_c: parseFloat(tempC),
+    uptime: uptimeStr,
+    disk: diskInfo,
+    hostname: os.hostname(),
+  });
+}
+
+function getSystemStatsToolDefinitions(): OllamaToolDefinition[] {
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'system_stats',
+        description:
+          'Get system resource usage for this server: CPU model, core count, load average, memory usage, disk usage, CPU temperature, and uptime. Use when asked about server health, performance, or resources.',
+        parameters: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
+      },
+    },
+  ];
+}
+
+// ── GitHub Notifications ──────────────────────────────────────────────────────
+
+async function executeGithubTool(
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const proxyOpts: RequestInit & { agent?: unknown } = {};
+  if (OUTBOUND_HTTPS_PROXY) {
+    const { HttpsProxyAgent } = await import('https-proxy-agent');
+    proxyOpts.agent = new HttpsProxyAgent(OUTBOUND_HTTPS_PROXY);
+  }
+
+  const ghFetch = async (url: string): Promise<unknown> => {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      ...(proxyOpts as RequestInit),
+    });
+    if (!res.ok) throw new Error(`GitHub API ${res.status}: ${await res.text()}`);
+    return res.json();
+  };
+
+  if (toolName === 'github_notifications') {
+    const all = (args.all as boolean) ?? false;
+    const data = (await ghFetch(
+      `https://api.github.com/notifications?all=${all}&per_page=20`,
+    )) as Array<{
+      id: string;
+      reason: string;
+      unread: boolean;
+      updated_at: string;
+      subject: { title: string; type: string; url: string };
+      repository: { full_name: string };
+    }>;
+    return JSON.stringify(
+      data.map((n) => ({
+        id: n.id,
+        repo: n.repository.full_name,
+        type: n.subject.type,
+        title: n.subject.title,
+        reason: n.reason,
+        unread: n.unread,
+        updated_at: n.updated_at,
+      })),
+    );
+  }
+
+  if (toolName === 'github_search') {
+    const query = args.query as string;
+    const type = (args.type as string) ?? 'repositories';
+    const url = `https://api.github.com/search/${type}?q=${encodeURIComponent(query)}&per_page=10`;
+    const data = (await ghFetch(url)) as {
+      total_count: number;
+      items: Array<Record<string, unknown>>;
+    };
+    return JSON.stringify({ total: data.total_count, items: data.items.slice(0, 10) });
+  }
+
+  throw new Error(`Unknown GitHub tool: ${toolName}`);
+}
+
+function getGithubToolDefinitions(): OllamaToolDefinition[] {
+  if (!GITHUB_TOKEN) return [];
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'github_notifications',
+        description:
+          'Fetch GitHub notifications (unread by default). Returns repo name, type (Issue/PR/Release), title, and reason (mention/review_requested/assign etc).',
+        parameters: {
+          type: 'object',
+          properties: {
+            all: {
+              type: 'boolean',
+              description: 'If true, return all notifications including read ones. Default false (unread only).',
+            },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'github_search',
+        description: 'Search GitHub for repositories, issues, or users.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'GitHub search query.' },
+            type: {
+              type: 'string',
+              description: 'Search type: "repositories", "issues", or "users". Default "repositories".',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  ];
+}
+
+// ── Bark Push Notifications ───────────────────────────────────────────────────
+
+async function executeBarkPush(args: Record<string, unknown>): Promise<string> {
+  const title = (args.title as string) ?? '通知';
+  const body = args.body as string;
+  const url = args.url as string | undefined;
+  const sound = (args.sound as string) ?? 'default';
+  const level = (args.level as string) ?? 'active';
+
+  const proxyOpts: RequestInit & { agent?: unknown } = {};
+  if (OUTBOUND_HTTPS_PROXY) {
+    const { HttpsProxyAgent } = await import('https-proxy-agent');
+    proxyOpts.agent = new HttpsProxyAgent(OUTBOUND_HTTPS_PROXY);
+  }
+
+  const endpoint = `${BARK_URL}/${BARK_KEY}`;
+  const payload: Record<string, string> = { title, body, sound, level };
+  if (url) payload['url'] = url;
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    ...(proxyOpts as RequestInit),
+  });
+
+  if (!res.ok) throw new Error(`Bark push failed: ${res.status} ${await res.text()}`);
+  const data = (await res.json()) as { code?: number; message?: string };
+  return JSON.stringify({ ok: true, message: data.message ?? 'sent' });
+}
+
+function getBarkToolDefinitions(): OllamaToolDefinition[] {
+  if (!BARK_KEY) return [];
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'bark_push',
+        description:
+          'Send a push notification to the user\'s iPhone via Bark app. Use when the user asks to be notified on their phone, or when sending an important alert that should interrupt them. Only use when explicitly requested.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Notification title.' },
+            body: { type: 'string', description: 'Notification body text.' },
+            url: { type: 'string', description: 'Optional URL to open when tapped.' },
+            sound: { type: 'string', description: 'Notification sound name (default "default").' },
+            level: {
+              type: 'string',
+              description: '"active" (default), "timeSensitive" (bypasses focus), or "passive" (silent).',
+            },
+          },
+          required: ['title', 'body'],
+        },
+      },
+    },
+  ];
+}
+
 
 function getTavilyToolDefinitions(): OllamaToolDefinition[] {
   if (!TAVILY_API_KEY) return [];
@@ -1808,6 +2074,9 @@ export function getOllamaToolDefinitions(opts?: {
     ...getGmailToolDefinitions(),
     ...getCalendarToolDefinitions(),
     ...getTavilyToolDefinitions(),
+    ...getSystemStatsToolDefinitions(),
+    ...getGithubToolDefinitions(),
+    ...getBarkToolDefinitions(),
   ];
 }
 

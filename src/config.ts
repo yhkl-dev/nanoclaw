@@ -15,6 +15,9 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'CONTAINER_HTTP_PROXY',
   'CREDENTIAL_PROXY_PORT',
+  'BARK_KEY',
+  'BARK_URL',
+  'GITHUB_TOKEN',
   'HTTPS_PROXY',
   'NO_PROXY',
   'TAVILY_API_KEY',
@@ -202,3 +205,9 @@ export const OUTBOUND_NO_PROXY: string | undefined =
 
 export const TAVILY_API_KEY: string | undefined =
   process.env.TAVILY_API_KEY || envConfig.TAVILY_API_KEY || undefined;
+export const GITHUB_TOKEN: string | undefined =
+  process.env.GITHUB_TOKEN || envConfig.GITHUB_TOKEN || undefined;
+export const BARK_KEY: string | undefined =
+  process.env.BARK_KEY || envConfig.BARK_KEY || undefined;
+export const BARK_URL: string =
+  process.env.BARK_URL || envConfig.BARK_URL || 'https://api.day.app';
