@@ -25,6 +25,8 @@
     "@wecom/aibot-node-sdk": "^1.0.4",
     "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0",
+    "google-auth-library": "^9.15.1",
+    "googleapis": "^146.0.0",
     "undici": "^6.21.0"
   },
   "devDependencies": {
