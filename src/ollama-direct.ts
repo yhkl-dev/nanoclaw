@@ -883,6 +883,92 @@ function extractBrowserToolCallsFromText(content: string): OllamaToolCall[] {
   return repaired;
 }
 
+/**
+ * Attempt to extract JSON tool calls that qwen/other models sometimes emit
+ * inside the text content instead of via the structured tool_calls field.
+ *
+ * Handles these patterns:
+ *   ```json\n{"name":"tool","arguments":{...}}\n```
+ *   {"name":"tool","arguments":{...}}
+ *   [{"name":"tool","arguments":{...}}, ...]
+ *   {"tool_name":"tool","tool_input":{...}}   (anthropic-style)
+ *   <tool_call>{"name":"tool","arguments":{...}}</tool_call>
+ */
+function extractJsonToolCallsFromText(
+  content: string,
+  knownToolNames: Set<string>,
+): OllamaToolCall[] {
+  if (!content) return [];
+
+  // Patterns to try, in priority order
+  const candidates: string[] = [];
+
+  // 1. ```json ... ``` fenced blocks
+  for (const m of content.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/gi)) {
+    candidates.push(m[1].trim());
+  }
+
+  // 2. <tool_call>...</tool_call> tags
+  for (const m of content.matchAll(/<tool_call>([\s\S]*?)<\/tool_call>/gi)) {
+    candidates.push(m[1].trim());
+  }
+
+  // 3. Bare JSON object/array that takes up most of the content
+  const stripped = content.trim();
+  if (stripped.startsWith('{') || stripped.startsWith('[')) {
+    candidates.push(stripped);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+      const calls: OllamaToolCall[] = [];
+      for (const item of items) {
+        if (typeof item !== 'object' || item === null) continue;
+        const obj = item as Record<string, unknown>;
+
+        // Standard format: {name, arguments}
+        let toolName =
+          typeof obj['name'] === 'string' ? obj['name'] : undefined;
+        let toolArgs =
+          typeof obj['arguments'] === 'object' && obj['arguments'] !== null
+            ? (obj['arguments'] as Record<string, unknown>)
+            : undefined;
+
+        // Anthropic-style: {tool_name, tool_input}
+        if (!toolName && typeof obj['tool_name'] === 'string') {
+          toolName = obj['tool_name'];
+        }
+        if (!toolArgs && typeof obj['tool_input'] === 'object') {
+          toolArgs = obj['tool_input'] as Record<string, unknown>;
+        }
+
+        // Qwen-style: {type:"function", function:{name,arguments}}
+        if (
+          !toolName &&
+          obj['type'] === 'function' &&
+          typeof obj['function'] === 'object'
+        ) {
+          const fn = obj['function'] as Record<string, unknown>;
+          if (typeof fn['name'] === 'string') toolName = fn['name'];
+          if (typeof fn['arguments'] === 'object')
+            toolArgs = fn['arguments'] as Record<string, unknown>;
+        }
+
+        if (!toolName || !knownToolNames.has(toolName)) continue;
+        calls.push({
+          function: { name: toolName, arguments: toolArgs ?? {} },
+        });
+      }
+      if (calls.length > 0) return calls;
+    } catch {
+      // not valid JSON, try next candidate
+    }
+  }
+  return [];
+}
+
 function buildSystemMessage(input: ContainerInput): string {
   const sections = [
     `You are ${ASSISTANT_NAME}, the NanoClaw assistant. Reply directly to the latest user request in plain text.`,
@@ -1208,13 +1294,27 @@ export async function runDirectOllamaAgent(
     let repeatedToolCallCount = 0;
     let previousFailedToolCallSignature: string | undefined;
     let repeatedFailedToolCallCount = 0;
+    const knownToolNames = new Set(
+      getOllamaToolDefinitions({ isMain: input.isMain }).map(
+        (t) => t.function.name,
+      ),
+    );
     toolLoop: for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
       const parsed = await chatWithOllama(requestMessages, timeoutMs, {
         isMain: input.isMain,
       });
-      const repairedToolCalls = !parsed.message?.tool_calls?.length
-        ? extractBrowserToolCallsFromText(parsed.message?.content || '')
-        : [];
+      const textContent = parsed.message?.content || '';
+      let repairedToolCalls: OllamaToolCall[] = [];
+      if (!parsed.message?.tool_calls?.length) {
+        // Try browser-tag repair first, then fall back to JSON extraction
+        repairedToolCalls = extractBrowserToolCallsFromText(textContent);
+        if (repairedToolCalls.length === 0) {
+          repairedToolCalls = extractJsonToolCallsFromText(
+            textContent,
+            knownToolNames,
+          );
+        }
+      }
       const responseMessage: OllamaChatMessage = {
         role: parsed.message?.role === 'tool' ? 'assistant' : 'assistant',
         content:

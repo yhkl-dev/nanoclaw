@@ -1053,17 +1053,37 @@ async function executeGmailTool(
   const gmail = createGmailClient();
 
   if (name === 'gmail_list') {
-    const query = typeof args.query === 'string' ? args.query : 'is:unread category:primary';
-    const maxResults = typeof args.max_results === 'number' ? args.max_results : 10;
-    const list = await gmail.users.messages.list({ userId: 'me', q: query, maxResults });
+    const query =
+      typeof args.query === 'string'
+        ? args.query
+        : 'is:unread category:primary';
+    const maxResults =
+      typeof args.max_results === 'number' ? args.max_results : 10;
+    const list = await gmail.users.messages.list({
+      userId: 'me',
+      q: query,
+      maxResults,
+    });
     const messages = list.data.messages ?? [];
     if (messages.length === 0) return JSON.stringify({ messages: [] });
     const details = await Promise.all(
       messages.slice(0, maxResults).map(async (m) => {
-        const msg = await gmail.users.messages.get({ userId: 'me', id: m.id!, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] });
+        const msg = await gmail.users.messages.get({
+          userId: 'me',
+          id: m.id!,
+          format: 'metadata',
+          metadataHeaders: ['From', 'Subject', 'Date'],
+        });
         const headers = msg.data.payload?.headers ?? [];
-        const h = (name: string) => headers.find((h) => h.name === name)?.value ?? '';
-        return { id: m.id, from: h('From'), subject: h('Subject'), date: h('Date'), snippet: msg.data.snippet };
+        const h = (name: string) =>
+          headers.find((h) => h.name === name)?.value ?? '';
+        return {
+          id: m.id,
+          from: h('From'),
+          subject: h('Subject'),
+          date: h('Date'),
+          snippet: msg.data.snippet,
+        };
       }),
     );
     return JSON.stringify({ messages: details });
@@ -1072,7 +1092,11 @@ async function executeGmailTool(
   if (name === 'gmail_read') {
     const id = String(args.id ?? '');
     if (!id) throw new Error('id is required');
-    const msg = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
+    const msg = await gmail.users.messages.get({
+      userId: 'me',
+      id,
+      format: 'full',
+    });
     const headers = msg.data.payload?.headers ?? [];
     const h = (n: string) => headers.find((h) => h.name === n)?.value ?? '';
 
@@ -1102,16 +1126,33 @@ async function executeGmailTool(
   if (name === 'gmail_search') {
     const query = typeof args.query === 'string' ? args.query : '';
     if (!query) throw new Error('query is required');
-    const maxResults = typeof args.max_results === 'number' ? args.max_results : 10;
-    const list = await gmail.users.messages.list({ userId: 'me', q: query, maxResults });
+    const maxResults =
+      typeof args.max_results === 'number' ? args.max_results : 10;
+    const list = await gmail.users.messages.list({
+      userId: 'me',
+      q: query,
+      maxResults,
+    });
     const messages = list.data.messages ?? [];
     if (messages.length === 0) return JSON.stringify({ messages: [] });
     const details = await Promise.all(
       messages.map(async (m) => {
-        const msg = await gmail.users.messages.get({ userId: 'me', id: m.id!, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] });
+        const msg = await gmail.users.messages.get({
+          userId: 'me',
+          id: m.id!,
+          format: 'metadata',
+          metadataHeaders: ['From', 'Subject', 'Date'],
+        });
         const headers = msg.data.payload?.headers ?? [];
-        const h = (name: string) => headers.find((h) => h.name === name)?.value ?? '';
-        return { id: m.id, from: h('From'), subject: h('Subject'), date: h('Date'), snippet: msg.data.snippet };
+        const h = (name: string) =>
+          headers.find((h) => h.name === name)?.value ?? '';
+        return {
+          id: m.id,
+          from: h('From'),
+          subject: h('Subject'),
+          date: h('Date'),
+          snippet: msg.data.snippet,
+        };
       }),
     );
     return JSON.stringify({ messages: details });
@@ -1121,7 +1162,8 @@ async function executeGmailTool(
     const to = String(args.to ?? '');
     const subject = String(args.subject ?? '');
     const body = String(args.body ?? '');
-    if (!to || !subject || !body) throw new Error('to, subject, and body are required');
+    if (!to || !subject || !body)
+      throw new Error('to, subject, and body are required');
     const raw = Buffer.from(
       `To: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`,
     )
@@ -1129,7 +1171,10 @@ async function executeGmailTool(
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
       .replace(/=+$/, '');
-    const sent = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+    const sent = await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: { raw },
+    });
     return JSON.stringify({ ok: true, id: sent.data.id });
   }
 
@@ -1243,7 +1288,16 @@ async function executeToolCall(
     return JSON.stringify({ content: content.slice(0, 12000) });
   }
   if (toolCall.function.name.startsWith('gmail_')) {
-    return executeGmailTool(toolCall.function.name, toolCall.function.arguments as Record<string, unknown>);
+    return executeGmailTool(
+      toolCall.function.name,
+      toolCall.function.arguments as Record<string, unknown>,
+    );
+  }
+  if (toolCall.function.name.startsWith('calendar_')) {
+    return executeCalendarTool(
+      toolCall.function.name,
+      toolCall.function.arguments as Record<string, unknown>,
+    );
   }
   throw new Error(`Unsupported tool: ${toolCall.function.name}`);
 }
@@ -1281,7 +1335,8 @@ function getGmailToolDefinitions(): OllamaToolDefinition[] {
             },
             max_results: {
               type: 'integer',
-              description: 'Maximum number of emails to return (default 10, max 20).',
+              description:
+                'Maximum number of emails to return (default 10, max 20).',
             },
           },
           required: [],
@@ -1298,7 +1353,8 @@ function getGmailToolDefinitions(): OllamaToolDefinition[] {
           properties: {
             id: {
               type: 'string',
-              description: 'The Gmail message ID (from gmail_list or gmail_search results).',
+              description:
+                'The Gmail message ID (from gmail_list or gmail_search results).',
             },
           },
           required: ['id'],
@@ -1350,6 +1406,186 @@ function getGmailToolDefinitions(): OllamaToolDefinition[] {
             },
           },
           required: ['to', 'subject', 'body'],
+        },
+      },
+    },
+  ];
+}
+
+function createCalendarClient() {
+  const credDir = path.join(os.homedir(), '.gmail-mcp');
+  const keysPath = path.join(credDir, 'gcp-oauth.keys.json');
+  const tokensPath = path.join(credDir, 'credentials.json');
+  if (!fs.existsSync(keysPath) || !fs.existsSync(tokensPath)) {
+    throw new Error('Google credentials not found. Run /add-gmail to set up.');
+  }
+  const keys = JSON.parse(fs.readFileSync(keysPath, 'utf-8'));
+  const tokens = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
+  if (!tokens.scope?.includes('calendar')) {
+    throw new Error(
+      'Google Calendar not authorized. Re-run OAuth with calendar scope.',
+    );
+  }
+  const clientConfig = keys.installed || keys.web || keys;
+  const auth = new google.auth.OAuth2(
+    clientConfig.client_id,
+    clientConfig.client_secret,
+    clientConfig.redirect_uris?.[0],
+  );
+  auth.setCredentials(tokens);
+  if (OUTBOUND_HTTPS_PROXY) {
+    const agent = new HttpsProxyAgent(OUTBOUND_HTTPS_PROXY);
+    auth.transporter.defaults = { ...auth.transporter.defaults, agent };
+  }
+  auth.on('tokens', (newTokens) => {
+    try {
+      const current = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
+      Object.assign(current, newTokens);
+      fs.writeFileSync(tokensPath, JSON.stringify(current, null, 2));
+    } catch {
+      // non-fatal
+    }
+  });
+  return google.calendar({ version: 'v3', auth });
+}
+
+async function executeCalendarTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const calendar = createCalendarClient();
+
+  if (name === 'calendar_list') {
+    const now = new Date();
+    const timeMin =
+      typeof args.time_min === 'string'
+        ? args.time_min
+        : now.toISOString();
+    const daysAhead = typeof args.days === 'number' ? args.days : 7;
+    const timeMax = new Date(
+      now.getTime() + daysAhead * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const res = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin,
+      timeMax,
+      maxResults: 20,
+      singleEvents: true,
+      orderBy: 'startTime',
+    });
+    const events = (res.data.items ?? []).map((e) => ({
+      id: e.id,
+      summary: e.summary,
+      start: e.start?.dateTime ?? e.start?.date,
+      end: e.end?.dateTime ?? e.end?.date,
+      location: e.location,
+      description: e.description?.slice(0, 200),
+    }));
+    return JSON.stringify({ events });
+  }
+
+  if (name === 'calendar_create') {
+    const summary = String(args.summary ?? '');
+    const start = String(args.start ?? '');
+    const end = String(args.end ?? start);
+    if (!summary || !start) throw new Error('summary and start are required');
+    const isAllDay = /^\d{4}-\d{2}-\d{2}$/.test(start);
+    const event = await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: {
+        summary,
+        description: typeof args.description === 'string' ? args.description : undefined,
+        location: typeof args.location === 'string' ? args.location : undefined,
+        start: isAllDay ? { date: start } : { dateTime: start },
+        end: isAllDay ? { date: end } : { dateTime: end },
+      },
+    });
+    return JSON.stringify({ ok: true, id: event.data.id, link: event.data.htmlLink });
+  }
+
+  if (name === 'calendar_delete') {
+    const id = String(args.id ?? '');
+    if (!id) throw new Error('id is required');
+    await calendar.events.delete({ calendarId: 'primary', eventId: id });
+    return JSON.stringify({ ok: true });
+  }
+
+  throw new Error(`Unknown Calendar tool: ${name}`);
+}
+
+function getCalendarToolDefinitions(): OllamaToolDefinition[] {
+  const credDir = path.join(os.homedir(), '.gmail-mcp');
+  try {
+    const tokensPath = path.join(credDir, 'credentials.json');
+    if (!fs.existsSync(tokensPath)) return [];
+    const tokens = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
+    if (!tokens.scope?.includes('calendar')) return [];
+  } catch {
+    return [];
+  }
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'calendar_list',
+        description:
+          'List upcoming Google Calendar events. Returns event title, start/end time, location.',
+        parameters: {
+          type: 'object',
+          properties: {
+            days: {
+              type: 'integer',
+              description: 'Number of days ahead to look (default 7).',
+            },
+            time_min: {
+              type: 'string',
+              description:
+                'ISO 8601 start time (default: now). E.g. "2024-06-01T00:00:00+08:00".',
+            },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'calendar_create',
+        description: 'Create a new event in Google Calendar.',
+        parameters: {
+          type: 'object',
+          properties: {
+            summary: { type: 'string', description: 'Event title.' },
+            start: {
+              type: 'string',
+              description:
+                'Start time in ISO 8601 (e.g. "2024-06-01T10:00:00+08:00") or date "2024-06-01" for all-day.',
+            },
+            end: {
+              type: 'string',
+              description: 'End time (same format as start). Defaults to same as start.',
+            },
+            description: { type: 'string', description: 'Event description.' },
+            location: { type: 'string', description: 'Event location.' },
+          },
+          required: ['summary', 'start'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'calendar_delete',
+        description: 'Delete an event from Google Calendar by its ID.',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Event ID from calendar_list results.',
+            },
+          },
+          required: ['id'],
         },
       },
     },
@@ -1464,6 +1700,7 @@ export function getOllamaToolDefinitions(opts?: {
     ...getBrowserToolDefinitions(),
     ...adminTools,
     ...getGmailToolDefinitions(),
+    ...getCalendarToolDefinitions(),
   ];
 }
 

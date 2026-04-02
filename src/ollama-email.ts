@@ -102,7 +102,10 @@ export async function sendEmailTool(
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error';
-    logger.error({ error: error instanceof Error ? error.message : String(error) }, `Failed to send email: ${errorMessage}`);
+    logger.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      `Failed to send email: ${errorMessage}`,
+    );
 
     return {
       success: false,

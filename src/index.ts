@@ -708,7 +708,10 @@ async function main(): Promise<void> {
       await channel.connect();
     } catch (err) {
       channels.pop();
-      logger.error({ err, channel: channelName }, 'Channel connect failed — skipping');
+      logger.error(
+        { err, channel: channelName },
+        'Channel connect failed — skipping',
+      );
     }
   }
   if (channels.length === 0) {

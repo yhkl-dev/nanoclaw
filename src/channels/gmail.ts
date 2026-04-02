@@ -79,7 +79,10 @@ export class GmailChannel implements Channel {
         ...this.oauth2Client.transporter.defaults,
         agent,
       };
-      logger.debug({ proxy: OUTBOUND_HTTPS_PROXY }, 'Gmail using outbound proxy');
+      logger.debug(
+        { proxy: OUTBOUND_HTTPS_PROXY },
+        'Gmail using outbound proxy',
+      );
     }
 
     // Persist refreshed tokens
@@ -102,12 +105,18 @@ export class GmailChannel implements Channel {
       const profile = await Promise.race([
         this.gmail.users.getProfile({ userId: 'me' }),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Gmail getProfile timed out after 8s')), 8000),
+          setTimeout(
+            () => reject(new Error('Gmail getProfile timed out after 8s')),
+            8000,
+          ),
         ),
       ]);
       emailAddress = profile.data.emailAddress || '';
     } catch (err) {
-      logger.warn({ err }, 'Gmail connection check failed — channel will poll later');
+      logger.warn(
+        { err },
+        'Gmail connection check failed — channel will poll later',
+      );
     }
     this.userEmail = emailAddress;
     logger.info({ email: this.userEmail }, 'Gmail channel connected');
