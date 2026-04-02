@@ -24,6 +24,7 @@ import {
   resetOllamaBrowserTransientState,
 } from './ollama-browser.js';
 import { assertSafeHttpDestination } from './network-policy.js';
+import { selectOllamaModel } from './ollama-router.js';
 import {
   executeOllamaToolCalls,
   getOllamaToolDefinitions,
@@ -1077,13 +1078,14 @@ function createFetchTimeout(timeoutMs: number): AbortSignal {
 async function chatWithOllama(
   messages: OllamaChatMessage[],
   timeoutMs: number,
-  opts?: { isMain?: boolean },
+  opts?: { isMain?: boolean; model?: string; prompt?: string },
 ): Promise<OllamaChatResponse> {
+  const model = opts?.model ?? selectOllamaModel(opts?.prompt ?? '', undefined) ?? OLLAMA_MODEL;
   const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: OLLAMA_MODEL,
+      model,
       stream: false,
       messages,
       tools: getOllamaToolDefinitions({ isMain: opts?.isMain }),
@@ -1105,6 +1107,7 @@ async function chatWithOllama(
   }
   logger.warn(
     {
+      model,
       hasToolCalls: !!parsed.message?.tool_calls?.length,
       toolCalls: parsed.message?.tool_calls?.map((c) => c.function.name),
       contentPreview: parsed.message?.content?.slice(0, 120),
@@ -1213,8 +1216,12 @@ export async function runDirectOllamaAgent(
   if (!OLLAMA_HOST) {
     throw new Error('MODEL_BACKEND=ollama requires OLLAMA_HOST');
   }
-  if (!OLLAMA_MODEL) {
-    throw new Error('MODEL_BACKEND=ollama requires OLLAMA_MODEL');
+  // OLLAMA_MODEL is required unless a per-group model or routing rules supply one
+  const effectiveModel = selectOllamaModel(input.prompt, group.ollamaModel);
+  if (!effectiveModel) {
+    throw new Error(
+      'MODEL_BACKEND=ollama requires OLLAMA_MODEL (or per-group ollamaModel / OLLAMA_MODEL_ROUTES)',
+    );
   }
   assertValidGroupFolder(group.folder);
   assertValidGroupFolder(input.groupFolder);
@@ -1281,13 +1288,16 @@ export async function runDirectOllamaAgent(
     logger.debug(
       {
         group: group.name,
-        model: OLLAMA_MODEL,
+        model: effectiveModel,
         host: OLLAMA_HOST,
         sessionId,
         messageCount: requestMessages.length,
       },
       'Sending direct Ollama request',
     );
+
+    // Use the already-resolved model for all rounds in this session
+    const resolvedModel = effectiveModel;
 
     let assistantText = '';
     let hadToolSuccess = false;
@@ -1306,6 +1316,8 @@ export async function runDirectOllamaAgent(
     toolLoop: for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
       const parsed = await chatWithOllama(requestMessages, timeoutMs, {
         isMain: input.isMain,
+        model: resolvedModel,
+        prompt: input.prompt,
       });
       const textContent = parsed.message?.content || '';
       let repairedToolCalls: OllamaToolCall[] = [];

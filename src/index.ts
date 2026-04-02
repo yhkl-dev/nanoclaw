@@ -56,6 +56,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { handleRssCommand, startRssPoller } from './rss-aggregator.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   restoreRemoteControl,
@@ -661,6 +662,25 @@ async function main(): Promise<void> {
         return;
       }
 
+      // RSS commands — /rss <subcommand> [args]
+      const rssMatch = trimmed.match(/^\/rss(?:\s+(.*))?$/i);
+      if (rssMatch) {
+        const group = registeredGroups[chatJid];
+        if (group) {
+          const channel = findChannel(channels, chatJid);
+          const args = rssMatch[1] ?? '';
+          handleRssCommand(args, group.folder, chatJid, (text) => {
+            const ch = channel ?? findChannel(channels, chatJid);
+            return ch
+              ? ch.sendMessage(chatJid, text)
+              : Promise.resolve();
+          }).catch((err) =>
+            logger.error({ err, chatJid }, 'RSS command error'),
+          );
+          return;
+        }
+      }
+
       // Sender allowlist drop mode: discard messages from denied senders before storing
       if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
         const cfg = loadSenderAllowlist();
@@ -730,6 +750,17 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
+        return;
+      }
+      const text = formatOutbound(rawText);
+      if (text) await channel.sendMessage(jid, text);
+    },
+  });
+  startRssPoller({
+    sendMessage: async (jid, rawText) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'RSS: no channel owns JID, cannot send message');
         return;
       }
       const text = formatOutbound(rawText);

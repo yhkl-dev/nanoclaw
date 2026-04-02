@@ -29,9 +29,11 @@ const envConfig = readEnvFile([
   'OLLAMA_HTTP_MAX_REDIRECTS',
   'OLLAMA_HTTP_TIMEOUT_MS',
   'OLLAMA_MODEL',
+  'OLLAMA_MODEL_ROUTES',
   'OLLAMA_SESSION_RECENT_MESSAGES',
   'OLLAMA_SESSION_SUMMARY_MAX_CHARS',
   'OLLAMA_THINK',
+  'RSS_POLL_INTERVAL_MS',
   'TZ',
   'WECOM_BOT_ID',
   'WECOM_BOT_SECRET',
@@ -211,3 +213,23 @@ export const BARK_KEY: string | undefined =
   process.env.BARK_KEY || envConfig.BARK_KEY || undefined;
 export const BARK_URL: string =
   process.env.BARK_URL || envConfig.BARK_URL || 'https://api.day.app';
+
+// RSS feed aggregator poll interval (default: 30 minutes)
+export const RSS_POLL_INTERVAL_MS = Math.max(
+  60_000,
+  parseInt(
+    process.env.RSS_POLL_INTERVAL_MS ||
+      envConfig.RSS_POLL_INTERVAL_MS ||
+      '1800000',
+    10,
+  ) || 1_800_000,
+);
+
+// Ollama multi-model routing rules.
+// Format: "keyword1:model1,keyword2:model2"
+// Keywords are matched case-insensitively against the full prompt.
+// First match wins; falls back to OLLAMA_MODEL if no rule matches.
+export const OLLAMA_MODEL_ROUTES: string | undefined =
+  process.env.OLLAMA_MODEL_ROUTES ||
+  envConfig.OLLAMA_MODEL_ROUTES ||
+  undefined;

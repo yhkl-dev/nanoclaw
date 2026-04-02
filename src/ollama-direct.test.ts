@@ -42,6 +42,7 @@ vi.mock('./config.js', () => ({
   OLLAMA_HTTP_MAX_REDIRECTS: 5,
   OLLAMA_HTTP_TIMEOUT_MS: 20_000,
   OLLAMA_MODEL: 'qwen3-coder:30b',
+  OLLAMA_MODEL_ROUTES: undefined,
   get OLLAMA_SESSION_RECENT_MESSAGES() {
     return mockedConfigFlags.ollamaSessionRecentMessages;
   },

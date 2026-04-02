@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -14,6 +15,7 @@ import { logger } from './logger.js';
 import {
   NewMessage,
   RegisteredGroup,
+  RssSubscription,
   ScheduledTask,
   TaskRunLog,
 } from './types.js';
@@ -109,6 +111,23 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS rss_subscriptions (
+      id TEXT PRIMARY KEY,
+      group_folder TEXT NOT NULL,
+      chat_jid TEXT NOT NULL,
+      url TEXT NOT NULL,
+      title TEXT,
+      last_fetched TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_rss_group ON rss_subscriptions(group_folder);
+    CREATE TABLE IF NOT EXISTS rss_seen_items (
+      subscription_id TEXT NOT NULL,
+      item_guid TEXT NOT NULL,
+      seen_at TEXT NOT NULL,
+      PRIMARY KEY (subscription_id, item_guid),
+      FOREIGN KEY (subscription_id) REFERENCES rss_subscriptions(id) ON DELETE CASCADE
+    );
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -177,6 +196,13 @@ function createSchema(database: Database.Database): void {
     );
   } catch {
     /* columns already exist */
+  }
+
+  // Add ollama_model column for per-group model override
+  try {
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN ollama_model TEXT`);
+  } catch {
+    /* column already exists */
   }
 
   const legacySessionsMigrated = database
@@ -673,6 +699,7 @@ export function getRegisteredGroup(
         container_config: string | null;
         requires_trigger: number | null;
         is_main: number | null;
+        ollama_model: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -695,6 +722,7 @@ export function getRegisteredGroup(
     requiresTrigger:
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
+    ollamaModel: row.ollama_model ?? undefined,
   };
 }
 
@@ -703,8 +731,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, ollama_model)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -714,6 +742,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.containerConfig ? JSON.stringify(group.containerConfig) : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
+    group.ollamaModel ?? null,
   );
 }
 
@@ -727,6 +756,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     container_config: string | null;
     requires_trigger: number | null;
     is_main: number | null;
+    ollama_model: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -748,9 +778,77 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
+      ollamaModel: row.ollama_model ?? undefined,
     };
   }
   return result;
+}
+
+// --- RSS Subscription CRUD ---
+
+export function createRssSubscription(
+  groupFolder: string,
+  chatJid: string,
+  url: string,
+  title?: string,
+): RssSubscription {
+  const id = randomUUID();
+  const createdAt = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO rss_subscriptions (id, group_folder, chat_jid, url, title, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, groupFolder, chatJid, url, title ?? null, createdAt);
+  return { id, group_folder: groupFolder, chat_jid: chatJid, url, title: title ?? null, last_fetched: null, created_at: createdAt };
+}
+
+export function getRssSubscriptions(groupFolder: string): RssSubscription[] {
+  return db
+    .prepare('SELECT * FROM rss_subscriptions WHERE group_folder = ? ORDER BY created_at ASC')
+    .all(groupFolder) as RssSubscription[];
+}
+
+export function getAllRssSubscriptions(): RssSubscription[] {
+  return db
+    .prepare('SELECT * FROM rss_subscriptions ORDER BY group_folder, created_at ASC')
+    .all() as RssSubscription[];
+}
+
+export function deleteRssSubscription(id: string): boolean {
+  const result = db.prepare('DELETE FROM rss_subscriptions WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+export function updateRssSubscriptionTitle(id: string, title: string): void {
+  db.prepare('UPDATE rss_subscriptions SET title = ? WHERE id = ?').run(title, id);
+}
+
+export function updateRssSubscriptionFetched(id: string, lastFetched: string): void {
+  db.prepare('UPDATE rss_subscriptions SET last_fetched = ? WHERE id = ?').run(lastFetched, id);
+}
+
+export function isRssItemSeen(subscriptionId: string, itemGuid: string): boolean {
+  const row = db
+    .prepare('SELECT 1 FROM rss_seen_items WHERE subscription_id = ? AND item_guid = ?')
+    .get(subscriptionId, itemGuid);
+  return row !== undefined;
+}
+
+export function markRssItemSeen(subscriptionId: string, itemGuid: string): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO rss_seen_items (subscription_id, item_guid, seen_at) VALUES (?, ?, ?)`,
+  ).run(subscriptionId, itemGuid, new Date().toISOString());
+}
+
+export function pruneRssSeenItems(subscriptionId: string, keepCount = 500): void {
+  db.prepare(
+    `DELETE FROM rss_seen_items
+     WHERE subscription_id = ? AND item_guid NOT IN (
+       SELECT item_guid FROM rss_seen_items
+       WHERE subscription_id = ?
+       ORDER BY seen_at DESC
+       LIMIT ?
+     )`,
+  ).run(subscriptionId, subscriptionId, keepCount);
 }
 
 // --- JSON migration ---
