@@ -17,6 +17,7 @@ const envConfig = readEnvFile([
   'CREDENTIAL_PROXY_PORT',
   'HTTPS_PROXY',
   'NO_PROXY',
+  'TAVILY_API_KEY',
   'MODEL_BACKEND',
   'OLLAMA_ADMIN_TOOLS',
   'OLLAMA_ENABLE_HOST_SCRIPTS',
@@ -198,3 +199,6 @@ export const OUTBOUND_HTTPS_PROXY: string | undefined =
   process.env.HTTPS_PROXY || envConfig.HTTPS_PROXY || undefined;
 export const OUTBOUND_NO_PROXY: string | undefined =
   process.env.NO_PROXY || envConfig.NO_PROXY || undefined;
+
+export const TAVILY_API_KEY: string | undefined =
+  process.env.TAVILY_API_KEY || envConfig.TAVILY_API_KEY || undefined;

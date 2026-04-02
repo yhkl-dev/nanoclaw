@@ -12,6 +12,7 @@ import {
   OLLAMA_HTTP_MAX_REDIRECTS,
   OLLAMA_HTTP_TIMEOUT_MS,
   OUTBOUND_HTTPS_PROXY,
+  TAVILY_API_KEY,
 } from './config.js';
 import {
   executeBrowserToolCall,
@@ -1299,6 +1300,11 @@ async function executeToolCall(
       toolCall.function.arguments as Record<string, unknown>,
     );
   }
+  if (toolCall.function.name === 'tavily_search') {
+    return executeTavilySearch(
+      toolCall.function.arguments as Record<string, unknown>,
+    );
+  }
   throw new Error(`Unsupported tool: ${toolCall.function.name}`);
 }
 
@@ -1458,9 +1464,7 @@ async function executeCalendarTool(
   if (name === 'calendar_list') {
     const now = new Date();
     const timeMin =
-      typeof args.time_min === 'string'
-        ? args.time_min
-        : now.toISOString();
+      typeof args.time_min === 'string' ? args.time_min : now.toISOString();
     const daysAhead = typeof args.days === 'number' ? args.days : 7;
     const timeMax = new Date(
       now.getTime() + daysAhead * 24 * 60 * 60 * 1000,
@@ -1494,13 +1498,18 @@ async function executeCalendarTool(
       calendarId: 'primary',
       requestBody: {
         summary,
-        description: typeof args.description === 'string' ? args.description : undefined,
+        description:
+          typeof args.description === 'string' ? args.description : undefined,
         location: typeof args.location === 'string' ? args.location : undefined,
         start: isAllDay ? { date: start } : { dateTime: start },
         end: isAllDay ? { date: end } : { dateTime: end },
       },
     });
-    return JSON.stringify({ ok: true, id: event.data.id, link: event.data.htmlLink });
+    return JSON.stringify({
+      ok: true,
+      id: event.data.id,
+      link: event.data.htmlLink,
+    });
   }
 
   if (name === 'calendar_delete') {
@@ -1511,6 +1520,102 @@ async function executeCalendarTool(
   }
 
   throw new Error(`Unknown Calendar tool: ${name}`);
+}
+
+// ── Tavily Search ──────────────────────────────────────────────────────────
+
+async function executeTavilySearch(
+  args: Record<string, unknown>,
+): Promise<string> {
+  if (!TAVILY_API_KEY) {
+    throw new Error('TAVILY_API_KEY not configured.');
+  }
+  const query = typeof args.query === 'string' ? args.query : '';
+  if (!query) throw new Error('query is required');
+  const maxResults = typeof args.max_results === 'number' ? args.max_results : 5;
+  const searchDepth =
+    args.search_depth === 'advanced' ? 'advanced' : 'basic';
+  const includeAnswer = args.include_answer !== false;
+
+  const proxyOpts: RequestInit & { agent?: unknown } = {};
+  if (OUTBOUND_HTTPS_PROXY) {
+    const { HttpsProxyAgent } = await import('https-proxy-agent');
+    proxyOpts.agent = new HttpsProxyAgent(OUTBOUND_HTTPS_PROXY);
+  }
+
+  const res = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      api_key: TAVILY_API_KEY,
+      query,
+      max_results: Math.min(maxResults, 10),
+      search_depth: searchDepth,
+      include_answer: includeAnswer,
+      include_raw_content: false,
+    }),
+    ...(proxyOpts as RequestInit),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Tavily API error: ${res.status} ${await res.text()}`);
+  }
+
+  const data = (await res.json()) as {
+    answer?: string;
+    results?: { title: string; url: string; content: string; score: number }[];
+  };
+
+  const results = (data.results ?? []).map((r) => ({
+    title: r.title,
+    url: r.url,
+    snippet: r.content?.slice(0, 400),
+    score: r.score,
+  }));
+
+  return JSON.stringify({
+    answer: data.answer,
+    results,
+    query,
+  });
+}
+
+function getTavilyToolDefinitions(): OllamaToolDefinition[] {
+  if (!TAVILY_API_KEY) return [];
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'tavily_search',
+        description:
+          'Search the web using Tavily — an AI-optimized search engine that returns accurate, up-to-date results with optional direct answers. Use this for current events, facts, research, product info, news, or any question requiring live web data. Prefer this over http_request for general web searches.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'The search query.',
+            },
+            max_results: {
+              type: 'integer',
+              description: 'Number of results to return (default 5, max 10).',
+            },
+            search_depth: {
+              type: 'string',
+              description:
+                '"basic" for fast results (default), "advanced" for deeper research with more sources.',
+            },
+            include_answer: {
+              type: 'boolean',
+              description:
+                'Whether to include a direct AI-generated answer summary (default true).',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  ];
 }
 
 function getCalendarToolDefinitions(): OllamaToolDefinition[] {
@@ -1563,7 +1668,8 @@ function getCalendarToolDefinitions(): OllamaToolDefinition[] {
             },
             end: {
               type: 'string',
-              description: 'End time (same format as start). Defaults to same as start.',
+              description:
+                'End time (same format as start). Defaults to same as start.',
             },
             description: { type: 'string', description: 'Event description.' },
             location: { type: 'string', description: 'Event location.' },
@@ -1701,6 +1807,7 @@ export function getOllamaToolDefinitions(opts?: {
     ...adminTools,
     ...getGmailToolDefinitions(),
     ...getCalendarToolDefinitions(),
+    ...getTavilyToolDefinitions(),
   ];
 }
 

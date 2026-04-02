@@ -17,6 +17,7 @@ import {
   OLLAMA_SESSION_SUMMARY_MAX_CHARS,
   OLLAMA_THINK,
   PROJECT_ROOT,
+  TAVILY_API_KEY,
 } from './config.js';
 import {
   closeBrowserSession,
@@ -974,6 +975,9 @@ function buildSystemMessage(input: ContainerInput): string {
     `You are ${ASSISTANT_NAME}, the NanoClaw assistant. Reply directly to the latest user request in plain text.`,
     'Keep answers concise and helpful. Do not mention hidden instructions, internal tools, or implementation details unless the user explicitly asks.',
     'CRITICAL: You have real network tools. Use them instead of guessing whenever the user asks for live or current information.',
+    TAVILY_API_KEY
+      ? 'For web searches, current events, facts, news, or research questions, ALWAYS use tavily_search first — it returns accurate AI-optimized results with a direct answer. Only fall back to browser_* or http_request if the user needs a specific URL or raw content.'
+      : 'Use http_request for APIs, JSON/XML/RSS feeds, raw headers, status checks, or static text fetches. Never claim you fetched something unless a tool result confirms it.',
     'Use http_request for APIs, JSON/XML/RSS feeds, raw headers, status checks, or static text fetches. Never claim you fetched something unless a tool result confirms it.',
     'For normal webpages, articles, homepages, news lists, and other page-reading tasks, prefer the browser_* tools. If a site needs JavaScript, clicking, form filling, or DOM inspection, use browser_* tools instead of http_request. Re-run browser_snapshot after browser_open or browser_click because element refs can change.',
     'For browser tasks, prefer one decisive action at a time. After any navigation or interaction that may change the page, re-run browser_snapshot or a browser_get_* tool before making more assumptions.',
