@@ -4,9 +4,11 @@ import path from 'path';
 
 import { google, gmail_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // isMain flag is used instead of MAIN_GROUP_FOLDER constant
 import { logger } from '../logger.js';
+import { OUTBOUND_HTTPS_PROXY } from '../config.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -70,6 +72,16 @@ export class GmailChannel implements Channel {
     );
     this.oauth2Client.setCredentials(tokens);
 
+    // Route through outbound proxy if configured (needed when Google is blocked)
+    if (OUTBOUND_HTTPS_PROXY) {
+      const agent = new HttpsProxyAgent(OUTBOUND_HTTPS_PROXY);
+      this.oauth2Client.transporter.defaults = {
+        ...this.oauth2Client.transporter.defaults,
+        agent,
+      };
+      logger.debug({ proxy: OUTBOUND_HTTPS_PROXY }, 'Gmail using outbound proxy');
+    }
+
     // Persist refreshed tokens
     this.oauth2Client.on('tokens', (newTokens) => {
       try {
@@ -84,16 +96,31 @@ export class GmailChannel implements Channel {
 
     this.gmail = google.gmail({ version: 'v1', auth: this.oauth2Client });
 
-    // Verify connection
-    const profile = await this.gmail.users.getProfile({ userId: 'me' });
-    this.userEmail = profile.data.emailAddress || '';
+    // Verify connection (with 8s timeout to avoid blocking the channel init loop)
+    let emailAddress = '';
+    try {
+      const profile = await Promise.race([
+        this.gmail.users.getProfile({ userId: 'me' }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Gmail getProfile timed out after 8s')), 8000),
+        ),
+      ]);
+      emailAddress = profile.data.emailAddress || '';
+    } catch (err) {
+      logger.warn({ err }, 'Gmail connection check failed — channel will poll later');
+    }
+    this.userEmail = emailAddress;
     logger.info({ email: this.userEmail }, 'Gmail channel connected');
 
     // Start polling with error backoff
     const schedulePoll = () => {
-      const backoffMs = this.consecutiveErrors > 0
-        ? Math.min(this.pollIntervalMs * Math.pow(2, this.consecutiveErrors), 30 * 60 * 1000)
-        : this.pollIntervalMs;
+      const backoffMs =
+        this.consecutiveErrors > 0
+          ? Math.min(
+              this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+              30 * 60 * 1000,
+            )
+          : this.pollIntervalMs;
       this.pollTimer = setTimeout(() => {
         this.pollForMessages()
           .catch((err) => logger.error({ err }, 'Gmail poll error'))
@@ -103,8 +130,6 @@ export class GmailChannel implements Channel {
       }, backoffMs);
     };
 
-    // Initial poll
-    await this.pollForMessages();
     schedulePoll();
   }
 
@@ -210,8 +235,18 @@ export class GmailChannel implements Channel {
       this.consecutiveErrors = 0;
     } catch (err) {
       this.consecutiveErrors++;
-      const backoffMs = Math.min(this.pollIntervalMs * Math.pow(2, this.consecutiveErrors), 30 * 60 * 1000);
-      logger.error({ err, consecutiveErrors: this.consecutiveErrors, nextPollMs: backoffMs }, 'Gmail poll failed');
+      const backoffMs = Math.min(
+        this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+        30 * 60 * 1000,
+      );
+      logger.error(
+        {
+          err,
+          consecutiveErrors: this.consecutiveErrors,
+          nextPollMs: backoffMs,
+        },
+        'Gmail poll failed',
+      );
     }
   }
 
@@ -268,9 +303,7 @@ export class GmailChannel implements Channel {
 
     // Find the main group to deliver the email notification
     const groups = this.opts.registeredGroups();
-    const mainEntry = Object.entries(groups).find(
-      ([, g]) => g.isMain === true,
-    );
+    const mainEntry = Object.entries(groups).find(([, g]) => g.isMain === true);
 
     if (!mainEntry) {
       logger.debug(

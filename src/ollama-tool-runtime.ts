@@ -1,13 +1,17 @@
 import { execFile } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { Agent, buildConnector } from 'undici';
+import { google } from 'googleapis';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 import {
   OLLAMA_ADMIN_TOOLS,
   OLLAMA_HTTP_ALLOW_PRIVATE,
   OLLAMA_HTTP_MAX_REDIRECTS,
   OLLAMA_HTTP_TIMEOUT_MS,
+  OUTBOUND_HTTPS_PROXY,
 } from './config.js';
 import {
   executeBrowserToolCall,
@@ -1008,6 +1012,130 @@ async function runHttpRequestTool(args: unknown): Promise<string> {
   );
 }
 
+// ── Gmail helpers ─────────────────────────────────────────────────────────────
+
+function createGmailClient() {
+  const credDir = path.join(os.homedir(), '.gmail-mcp');
+  const keysPath = path.join(credDir, 'gcp-oauth.keys.json');
+  const tokensPath = path.join(credDir, 'credentials.json');
+  if (!fs.existsSync(keysPath) || !fs.existsSync(tokensPath)) {
+    throw new Error('Gmail credentials not found. Run /add-gmail to set up.');
+  }
+  const keys = JSON.parse(fs.readFileSync(keysPath, 'utf-8'));
+  const tokens = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
+  const clientConfig = keys.installed || keys.web || keys;
+  const auth = new google.auth.OAuth2(
+    clientConfig.client_id,
+    clientConfig.client_secret,
+    clientConfig.redirect_uris?.[0],
+  );
+  auth.setCredentials(tokens);
+  if (OUTBOUND_HTTPS_PROXY) {
+    const agent = new HttpsProxyAgent(OUTBOUND_HTTPS_PROXY);
+    auth.transporter.defaults = { ...auth.transporter.defaults, agent };
+  }
+  auth.on('tokens', (newTokens) => {
+    try {
+      const current = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
+      Object.assign(current, newTokens);
+      fs.writeFileSync(tokensPath, JSON.stringify(current, null, 2));
+    } catch {
+      // non-fatal
+    }
+  });
+  return google.gmail({ version: 'v1', auth });
+}
+
+async function executeGmailTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const gmail = createGmailClient();
+
+  if (name === 'gmail_list') {
+    const query = typeof args.query === 'string' ? args.query : 'is:unread category:primary';
+    const maxResults = typeof args.max_results === 'number' ? args.max_results : 10;
+    const list = await gmail.users.messages.list({ userId: 'me', q: query, maxResults });
+    const messages = list.data.messages ?? [];
+    if (messages.length === 0) return JSON.stringify({ messages: [] });
+    const details = await Promise.all(
+      messages.slice(0, maxResults).map(async (m) => {
+        const msg = await gmail.users.messages.get({ userId: 'me', id: m.id!, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] });
+        const headers = msg.data.payload?.headers ?? [];
+        const h = (name: string) => headers.find((h) => h.name === name)?.value ?? '';
+        return { id: m.id, from: h('From'), subject: h('Subject'), date: h('Date'), snippet: msg.data.snippet };
+      }),
+    );
+    return JSON.stringify({ messages: details });
+  }
+
+  if (name === 'gmail_read') {
+    const id = String(args.id ?? '');
+    if (!id) throw new Error('id is required');
+    const msg = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
+    const headers = msg.data.payload?.headers ?? [];
+    const h = (n: string) => headers.find((h) => h.name === n)?.value ?? '';
+
+    function extractBody(payload: typeof msg.data.payload): string {
+      if (!payload) return '';
+      if (payload.mimeType === 'text/plain' && payload.body?.data) {
+        return Buffer.from(payload.body.data, 'base64').toString('utf-8');
+      }
+      for (const part of payload.parts ?? []) {
+        const text = extractBody(part);
+        if (text) return text;
+      }
+      return '';
+    }
+
+    const body = extractBody(msg.data.payload);
+    return JSON.stringify({
+      id,
+      from: h('From'),
+      to: h('To'),
+      subject: h('Subject'),
+      date: h('Date'),
+      body: body.slice(0, 8000),
+    });
+  }
+
+  if (name === 'gmail_search') {
+    const query = typeof args.query === 'string' ? args.query : '';
+    if (!query) throw new Error('query is required');
+    const maxResults = typeof args.max_results === 'number' ? args.max_results : 10;
+    const list = await gmail.users.messages.list({ userId: 'me', q: query, maxResults });
+    const messages = list.data.messages ?? [];
+    if (messages.length === 0) return JSON.stringify({ messages: [] });
+    const details = await Promise.all(
+      messages.map(async (m) => {
+        const msg = await gmail.users.messages.get({ userId: 'me', id: m.id!, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] });
+        const headers = msg.data.payload?.headers ?? [];
+        const h = (name: string) => headers.find((h) => h.name === name)?.value ?? '';
+        return { id: m.id, from: h('From'), subject: h('Subject'), date: h('Date'), snippet: msg.data.snippet };
+      }),
+    );
+    return JSON.stringify({ messages: details });
+  }
+
+  if (name === 'gmail_send') {
+    const to = String(args.to ?? '');
+    const subject = String(args.subject ?? '');
+    const body = String(args.body ?? '');
+    if (!to || !subject || !body) throw new Error('to, subject, and body are required');
+    const raw = Buffer.from(
+      `To: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`,
+    )
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    const sent = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+    return JSON.stringify({ ok: true, id: sent.data.id });
+  }
+
+  throw new Error(`Unknown Gmail tool: ${name}`);
+}
+
 async function executeToolCall(
   toolCall: OllamaToolCall,
   context: OllamaToolContext,
@@ -1072,11 +1200,15 @@ async function executeToolCall(
           const out = stdout.slice(0, 8000);
           const errOut = stderr.slice(0, 2000);
           if (err && !stdout) {
-            resolve(
-              JSON.stringify({ error: err.message, stderr: errOut }),
-            );
+            resolve(JSON.stringify({ error: err.message, stderr: errOut }));
           } else {
-            resolve(JSON.stringify({ stdout: out, stderr: errOut, exitCode: err?.code ?? 0 }));
+            resolve(
+              JSON.stringify({
+                stdout: out,
+                stderr: errOut,
+                exitCode: err?.code ?? 0,
+              }),
+            );
           }
         },
       );
@@ -1110,6 +1242,9 @@ async function executeToolCall(
     const content = fs.readFileSync(resolved, 'utf-8');
     return JSON.stringify({ content: content.slice(0, 12000) });
   }
+  if (toolCall.function.name.startsWith('gmail_')) {
+    return executeGmailTool(toolCall.function.name, toolCall.function.arguments as Record<string, unknown>);
+  }
   throw new Error(`Unsupported tool: ${toolCall.function.name}`);
 }
 
@@ -1119,6 +1254,106 @@ export function resetOllamaToolRuntimeState(): void {
     void entry.agent.close();
   }
   agentPool.clear();
+}
+
+function getGmailToolDefinitions(): OllamaToolDefinition[] {
+  const credDir = path.join(os.homedir(), '.gmail-mcp');
+  if (
+    !fs.existsSync(path.join(credDir, 'gcp-oauth.keys.json')) ||
+    !fs.existsSync(path.join(credDir, 'credentials.json'))
+  ) {
+    return [];
+  }
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'gmail_list',
+        description:
+          'List recent emails from Gmail. Returns sender, subject, date, and snippet for each message.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description:
+                'Gmail search query (e.g. "is:unread", "from:boss@example.com"). Defaults to "is:unread category:primary".',
+            },
+            max_results: {
+              type: 'integer',
+              description: 'Maximum number of emails to return (default 10, max 20).',
+            },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'gmail_read',
+        description: 'Read the full content of a specific email by its ID.',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: 'The Gmail message ID (from gmail_list or gmail_search results).',
+            },
+          },
+          required: ['id'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'gmail_search',
+        description:
+          'Search Gmail for emails matching a query. Returns sender, subject, date, and snippet.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description:
+                'Gmail search query string, e.g. "subject:invoice from:alice" or "after:2024/01/01 has:attachment".',
+            },
+            max_results: {
+              type: 'integer',
+              description: 'Maximum number of results to return (default 10).',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'gmail_send',
+        description: 'Send an email via Gmail.',
+        parameters: {
+          type: 'object',
+          properties: {
+            to: {
+              type: 'string',
+              description: 'Recipient email address.',
+            },
+            subject: {
+              type: 'string',
+              description: 'Email subject line.',
+            },
+            body: {
+              type: 'string',
+              description: 'Plain-text email body.',
+            },
+          },
+          required: ['to', 'subject', 'body'],
+        },
+      },
+    },
+  ];
 }
 
 export function getOllamaToolDefinitions(opts?: {
@@ -1228,6 +1463,7 @@ export function getOllamaToolDefinitions(opts?: {
     },
     ...getBrowserToolDefinitions(),
     ...adminTools,
+    ...getGmailToolDefinitions(),
   ];
 }
 

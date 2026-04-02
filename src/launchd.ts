@@ -49,6 +49,9 @@ export function sanitizeInstalledLaunchdPlist(homeDir = os.homedir()): boolean {
   }
 
   fs.writeFileSync(plistPath, updated);
-  logger.info({ plistPath }, 'Removed ASSISTANT_NAME from installed launchd plist');
+  logger.info(
+    { plistPath },
+    'Removed ASSISTANT_NAME from installed launchd plist',
+  );
   return true;
 }

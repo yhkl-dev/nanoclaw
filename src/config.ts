@@ -15,6 +15,8 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'CONTAINER_HTTP_PROXY',
   'CREDENTIAL_PROXY_PORT',
+  'HTTPS_PROXY',
+  'NO_PROXY',
   'MODEL_BACKEND',
   'OLLAMA_ADMIN_TOOLS',
   'OLLAMA_ENABLE_HOST_SCRIPTS',
@@ -190,3 +192,9 @@ function resolveConfigTimezone(): string {
   return 'UTC';
 }
 export const TIMEZONE = resolveConfigTimezone();
+
+// Outbound proxy for Google APIs and other external HTTPS calls.
+export const OUTBOUND_HTTPS_PROXY: string | undefined =
+  process.env.HTTPS_PROXY || envConfig.HTTPS_PROXY || undefined;
+export const OUTBOUND_NO_PROXY: string | undefined =
+  process.env.NO_PROXY || envConfig.NO_PROXY || undefined;

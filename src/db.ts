@@ -25,9 +25,10 @@ function getAssistantMessagePrefixes(botPrefix: string): string[] {
   return getAcceptedAssistantNames(botPrefix);
 }
 
-function buildMessagePrefixConditions(
-  prefixes: string[],
-): { sql: string; params: string[] } {
+function buildMessagePrefixConditions(prefixes: string[]): {
+  sql: string;
+  params: string[];
+} {
   return {
     sql: prefixes.map(() => 'content LIKE ?').join(' OR '),
     params: prefixes.map((prefix) => `${prefix}:%`),

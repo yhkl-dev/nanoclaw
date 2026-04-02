@@ -22,11 +22,13 @@
   },
   "dependencies": {
     "@onecli-sh/sdk": "^0.2.0",
+    "@types/nodemailer": "^7.0.11",
     "@wecom/aibot-node-sdk": "^1.0.4",
     "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0",
     "google-auth-library": "^9.15.1",
     "googleapis": "^146.0.0",
+    "nodemailer": "^8.0.4",
     "undici": "^6.21.0"
   },
   "devDependencies": {
