@@ -1,1 +1,0 @@
-{"intent":"chat","confidence":0.9,"entities":{"file":"src/classifier.ts"},"rawPrompt":"关于这块，src/classifier.ts⁠   我现在已经在本地有一套完整的Ollama，不会到claude 模型，你觉得怎么做比较好，对于claude的逻辑其实我想保留， 但是我希望对本地ollama模型支持更好"}

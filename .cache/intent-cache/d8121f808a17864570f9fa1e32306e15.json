@@ -1,1 +1,0 @@
-{"intent":"bash_exec","confidence":0.9,"entities":{"command":"ls -R && cat CLAUDE.md"},"rawPrompt":"⦁持久化记忆 (Persistent Memory)：\n ⦁Group Memory：每个群组有自己的  ⁠CLAUDE.md⁠  和文件目录，确保不同上下文不混淆。\n ⦁Global Memory：全局共享的知识库。 \n这三部分，看看你的本地代码实现，我们已经跟云端不太一样了"}

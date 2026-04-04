@@ -1,1 +1,0 @@
-{"intent":"calendar_create","confidence":0.95,"entities":{"summary":"跟william的会议","recurrence":"weekly","days":["Monday","Wednesday","Friday"],"start_time":"16:00","end_time":"17:00","start_date":"next week","end_date":"before May","constraints":"skip Chinese public holidays"},"rawPrompt":"设置从下周开始每周一、三、周五 16:00-17:00 的跟william的会议，注意跳过中国公共假期时间 , 到5月之前"}
