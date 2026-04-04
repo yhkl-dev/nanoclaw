@@ -205,6 +205,21 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add reply context columns for quoted message support
+  try {
+    database.exec(
+      `ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`,
+    );
+    database.exec(
+      `ALTER TABLE messages ADD COLUMN reply_to_message_content TEXT`,
+    );
+    database.exec(
+      `ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`,
+    );
+  } catch {
+    /* columns already exist */
+  }
+
   const legacySessionsMigrated = database
     .prepare('SELECT value FROM router_state WHERE key = ?')
     .get(LEGACY_SESSIONS_MIGRATION_KEY) as { value: string } | undefined;
@@ -347,7 +362,7 @@ export function setLastGroupSync(): void {
  */
 export function storeMessage(msg: NewMessage): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, reply_to_message_id, reply_to_message_content, reply_to_sender_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -357,6 +372,9 @@ export function storeMessage(msg: NewMessage): void {
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
+    msg.reply_to_message_id ?? null,
+    msg.reply_to_message_content ?? null,
+    msg.reply_to_sender_name ?? null,
   );
 }
 
@@ -402,7 +420,8 @@ export function getNewMessages(
   // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+             reply_to_message_id, reply_to_message_content, reply_to_sender_name
       FROM messages
       WHERE timestamp > ? AND chat_jid IN (${placeholders})
         AND is_bot_message = 0
@@ -445,7 +464,8 @@ export function getMessagesSince(
   // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+             reply_to_message_id, reply_to_message_content, reply_to_sender_name
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
         AND is_bot_message = 0
@@ -798,48 +818,82 @@ export function createRssSubscription(
     `INSERT INTO rss_subscriptions (id, group_folder, chat_jid, url, title, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(id, groupFolder, chatJid, url, title ?? null, createdAt);
-  return { id, group_folder: groupFolder, chat_jid: chatJid, url, title: title ?? null, last_fetched: null, created_at: createdAt };
+  return {
+    id,
+    group_folder: groupFolder,
+    chat_jid: chatJid,
+    url,
+    title: title ?? null,
+    last_fetched: null,
+    created_at: createdAt,
+  };
 }
 
 export function getRssSubscriptions(groupFolder: string): RssSubscription[] {
   return db
-    .prepare('SELECT * FROM rss_subscriptions WHERE group_folder = ? ORDER BY created_at ASC')
+    .prepare(
+      'SELECT * FROM rss_subscriptions WHERE group_folder = ? ORDER BY created_at ASC',
+    )
     .all(groupFolder) as RssSubscription[];
 }
 
 export function getAllRssSubscriptions(): RssSubscription[] {
   return db
-    .prepare('SELECT * FROM rss_subscriptions ORDER BY group_folder, created_at ASC')
+    .prepare(
+      'SELECT * FROM rss_subscriptions ORDER BY group_folder, created_at ASC',
+    )
     .all() as RssSubscription[];
 }
 
 export function deleteRssSubscription(id: string): boolean {
-  const result = db.prepare('DELETE FROM rss_subscriptions WHERE id = ?').run(id);
+  const result = db
+    .prepare('DELETE FROM rss_subscriptions WHERE id = ?')
+    .run(id);
   return result.changes > 0;
 }
 
 export function updateRssSubscriptionTitle(id: string, title: string): void {
-  db.prepare('UPDATE rss_subscriptions SET title = ? WHERE id = ?').run(title, id);
+  db.prepare('UPDATE rss_subscriptions SET title = ? WHERE id = ?').run(
+    title,
+    id,
+  );
 }
 
-export function updateRssSubscriptionFetched(id: string, lastFetched: string): void {
-  db.prepare('UPDATE rss_subscriptions SET last_fetched = ? WHERE id = ?').run(lastFetched, id);
+export function updateRssSubscriptionFetched(
+  id: string,
+  lastFetched: string,
+): void {
+  db.prepare('UPDATE rss_subscriptions SET last_fetched = ? WHERE id = ?').run(
+    lastFetched,
+    id,
+  );
 }
 
-export function isRssItemSeen(subscriptionId: string, itemGuid: string): boolean {
+export function isRssItemSeen(
+  subscriptionId: string,
+  itemGuid: string,
+): boolean {
   const row = db
-    .prepare('SELECT 1 FROM rss_seen_items WHERE subscription_id = ? AND item_guid = ?')
+    .prepare(
+      'SELECT 1 FROM rss_seen_items WHERE subscription_id = ? AND item_guid = ?',
+    )
     .get(subscriptionId, itemGuid);
   return row !== undefined;
 }
 
-export function markRssItemSeen(subscriptionId: string, itemGuid: string): void {
+export function markRssItemSeen(
+  subscriptionId: string,
+  itemGuid: string,
+): void {
   db.prepare(
     `INSERT OR IGNORE INTO rss_seen_items (subscription_id, item_guid, seen_at) VALUES (?, ?, ?)`,
   ).run(subscriptionId, itemGuid, new Date().toISOString());
 }
 
-export function pruneRssSeenItems(subscriptionId: string, keepCount = 500): void {
+export function pruneRssSeenItems(
+  subscriptionId: string,
+  keepCount = 500,
+): void {
   db.prepare(
     `DELETE FROM rss_seen_items
      WHERE subscription_id = ? AND item_guid NOT IN (
