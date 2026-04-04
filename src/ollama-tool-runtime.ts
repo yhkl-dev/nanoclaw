@@ -1334,7 +1334,9 @@ async function executeToolCall(
     const groupDir = path.join(GROUPS_DIR, context.groupFolder);
     const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
     const timestamp = new Date().toISOString().slice(0, 10);
-    const header = section ? `\n## ${section} (${timestamp})\n` : `\n<!-- ${timestamp} -->\n`;
+    const header = section
+      ? `\n## ${section} (${timestamp})\n`
+      : `\n<!-- ${timestamp} -->\n`;
     const entry = `${header}${note.trim()}\n`;
     fs.mkdirSync(groupDir, { recursive: true });
     fs.appendFileSync(claudeMdPath, entry, 'utf-8');
@@ -2025,8 +2027,67 @@ function getCalendarToolDefinitions(): OllamaToolDefinition[] {
   ];
 }
 
+/**
+ * Intent → allowed tool name prefixes/groups.
+ * null means no filtering (all tools allowed).
+ * 'memory' and 'http_request' are always included as baseline.
+ */
+const INTENT_ALLOWED_GROUPS: Record<string, string[] | null> = {
+  chat: [],
+  search_web: ['tavily_', 'http_request'],
+  tavily_search: ['tavily_', 'http_request'],
+  browse_web: ['browser_', 'http_request'],
+  browser_open: ['browser_', 'http_request'],
+  browser_snapshot: ['browser_', 'http_request'],
+  browser_click: ['browser_', 'http_request'],
+  browser_type: ['browser_', 'http_request'],
+  browser_get_text: ['browser_', 'http_request'],
+  browser_get_html: ['browser_', 'http_request'],
+  browser_get_value: ['browser_', 'http_request'],
+  browser_get_attr: ['browser_', 'http_request'],
+  browser_get_count: ['browser_', 'http_request'],
+  browser_get_title: ['browser_', 'http_request'],
+  browser_get_url: ['browser_', 'http_request'],
+  browser_close: ['browser_', 'http_request'],
+  send_email: ['gmail_'],
+  read_email: ['gmail_'],
+  gmail_list: ['gmail_'],
+  gmail_read: ['gmail_'],
+  gmail_search: ['gmail_'],
+  gmail_send: ['gmail_'],
+  calendar_list: ['calendar_'],
+  calendar_create: ['calendar_'],
+  calendar_delete: ['calendar_'],
+  system_stats: ['system_stats'],
+  read_file: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
+  write_file: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
+  run_bash: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
+  bash_exec: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
+  search_files: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
+  // unknown / undefined = no filtering
+  unknown: null,
+};
+
+function filterToolsByIntent(
+  tools: OllamaToolDefinition[],
+  intent: string | undefined,
+): OllamaToolDefinition[] {
+  if (!intent || !(intent in INTENT_ALLOWED_GROUPS)) return tools;
+
+  const allowed = INTENT_ALLOWED_GROUPS[intent];
+  if (allowed === null) return tools; // no filtering
+
+  // memory_write is always included as baseline
+  return tools.filter((t) => {
+    const name = t.function.name;
+    if (name === 'memory_write') return true;
+    return allowed.some((prefix) => name.startsWith(prefix) || name === prefix);
+  });
+}
+
 export function getOllamaToolDefinitions(opts?: {
   isMain?: boolean;
+  intent?: string;
 }): OllamaToolDefinition[] {
   const adminTools: OllamaToolDefinition[] =
     OLLAMA_ADMIN_TOOLS && opts?.isMain
@@ -2092,7 +2153,7 @@ export function getOllamaToolDefinitions(opts?: {
         ]
       : [];
 
-  return [
+  const allTools: OllamaToolDefinition[] = [
     {
       type: 'function',
       function: {
@@ -2162,6 +2223,8 @@ export function getOllamaToolDefinitions(opts?: {
       },
     },
   ];
+
+  return filterToolsByIntent(allTools, opts?.intent);
 }
 
 export async function executeOllamaToolCalls(

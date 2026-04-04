@@ -30,6 +30,7 @@ import {
   getOllamaToolDefinitions,
   resetOllamaToolRuntimeState,
 } from './ollama-tool-runtime.js';
+import { classifyIntent } from './intent/intent-classifier.js';
 import {
   assertValidGroupFolder,
   resolveGroupFolderPath,
@@ -1078,14 +1079,16 @@ function createFetchTimeout(timeoutMs: number): AbortSignal {
 async function chatWithOllama(
   messages: OllamaChatMessage[],
   timeoutMs: number,
-  opts?: { isMain?: boolean; model?: string; prompt?: string },
+  opts?: { isMain?: boolean; model?: string; prompt?: string; intent?: string },
 ): Promise<OllamaChatResponse> {
   const model =
     opts?.model ??
     selectOllamaModel(opts?.prompt ?? '', undefined) ??
     OLLAMA_MODEL;
 
-  async function attemptChat(attemptModel: string): Promise<OllamaChatResponse> {
+  async function attemptChat(
+    attemptModel: string,
+  ): Promise<OllamaChatResponse> {
     const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1093,7 +1096,7 @@ async function chatWithOllama(
         model: attemptModel,
         stream: false,
         messages,
-        tools: getOllamaToolDefinitions({ isMain: opts?.isMain }),
+        tools: getOllamaToolDefinitions({ isMain: opts?.isMain, intent: opts?.intent }),
         think: OLLAMA_THINK,
       }),
       signal: createFetchTimeout(timeoutMs),
@@ -1319,6 +1322,18 @@ export async function runDirectOllamaAgent(
       'Sending direct Ollama request',
     );
 
+    // Classify intent for tool pre-filtering (non-blocking, best-effort)
+    const intentResult = input.isScheduledTask
+      ? null
+      : await classifyIntent(input.prompt);
+    const classifiedIntent = intentResult?.intent;
+    if (classifiedIntent) {
+      logger.debug(
+        { group: group.name, intent: classifiedIntent, confidence: intentResult?.confidence },
+        'Intent classified',
+      );
+    }
+
     // Use the already-resolved model for all rounds in this session
     const resolvedModel = effectiveModel;
 
@@ -1332,7 +1347,7 @@ export async function runDirectOllamaAgent(
     let previousFailedToolCallSignature: string | undefined;
     let repeatedFailedToolCallCount = 0;
     const knownToolNames = new Set(
-      getOllamaToolDefinitions({ isMain: input.isMain }).map(
+      getOllamaToolDefinitions({ isMain: input.isMain, intent: classifiedIntent }).map(
         (t) => t.function.name,
       ),
     );
@@ -1341,6 +1356,7 @@ export async function runDirectOllamaAgent(
         isMain: input.isMain,
         model: resolvedModel,
         prompt: input.prompt,
+        intent: classifiedIntent,
       });
       const textContent = parsed.message?.content || '';
       let repairedToolCalls: OllamaToolCall[] = [];
