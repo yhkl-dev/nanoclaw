@@ -1237,6 +1237,17 @@ async function runScript(
   });
 }
 
+/**
+ * Extract the last user message text from the formatted XML prompt.
+ * The XML format is: <message sender="..." timestamp="...">text</message>
+ * Returns null if no message block found.
+ */
+function extractLastUserMessage(prompt: string): string | null {
+  const matches = [...prompt.matchAll(/<message\b[^>]*>([\s\S]*?)<\/message>/gi)];
+  if (!matches.length) return null;
+  return matches[matches.length - 1][1].trim() || null;
+}
+
 export async function runDirectOllamaAgent(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -1325,10 +1336,14 @@ export async function runDirectOllamaAgent(
       'Sending direct Ollama request',
     );
 
-    // Classify intent for tool pre-filtering (non-blocking, best-effort)
-    const intentResult = input.isScheduledTask
-      ? null
-      : await classifyIntent(input.prompt);
+    // Classify intent for tool pre-filtering (non-blocking, best-effort).
+    // Extract only the last raw user message from the XML prompt — not the full
+    // formatted context with history — to keep classification fast and accurate.
+    const rawLastMessage = extractLastUserMessage(input.prompt);
+    const intentResult =
+      input.isScheduledTask || !rawLastMessage
+        ? null
+        : await classifyIntent(rawLastMessage);
     const classifiedIntent = intentResult?.intent;
     if (classifiedIntent) {
       logger.info(
@@ -1341,7 +1356,10 @@ export async function runDirectOllamaAgent(
         '[intent] applied to tool selection',
       );
     } else {
-      logger.info({ group: group.name }, '[intent] no filtering applied — using all tools');
+      logger.info(
+        { group: group.name },
+        '[intent] no filtering applied — using all tools',
+      );
     }
 
     // Use the already-resolved model for all rounds in this session
