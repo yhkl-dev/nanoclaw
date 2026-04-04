@@ -13,7 +13,7 @@ import type {
 
 const CACHE_DIR = path.join(process.cwd(), '.cache/intent-cache');
 const DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-const CLASSIFY_TIMEOUT_MS = 20_000;
+const CLASSIFY_TIMEOUT_MS = 30_000;
 
 export class LLMIntentClassifier {
   private config: LLMClassifierConfig;
@@ -86,14 +86,12 @@ export class LLMIntentClassifier {
 
   private async callLLM(userMessage: string): Promise<IntentResult> {
     const host = OLLAMA_HOST;
-    // Only use LLM classification if OLLAMA_FAST_MODEL is explicitly set.
-    // Falling back to the main model (which may be 30B+) defeats the purpose.
-    const model = OLLAMA_FAST_MODEL;
+    // Use OLLAMA_FAST_MODEL if set, otherwise fall back to the main OLLAMA_MODEL.
+    // When only one model is loaded in VRAM, reusing it avoids model-swap overhead.
+    const model = OLLAMA_FAST_MODEL || OLLAMA_MODEL;
 
     if (!host || !model) {
-      logger.info(
-        '[intent] OLLAMA_FAST_MODEL not set — using keyword match only (set OLLAMA_FAST_MODEL=<small-model> to enable LLM classification)',
-      );
+      logger.info('[intent] no model configured, using keyword match only');
       return this.fallbackKeywordMatch(userMessage);
     }
 
