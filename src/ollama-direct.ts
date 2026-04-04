@@ -1096,7 +1096,10 @@ async function chatWithOllama(
         model: attemptModel,
         stream: false,
         messages,
-        tools: getOllamaToolDefinitions({ isMain: opts?.isMain, intent: opts?.intent }),
+        tools: getOllamaToolDefinitions({
+          isMain: opts?.isMain,
+          intent: opts?.intent,
+        }),
         think: OLLAMA_THINK,
       }),
       signal: createFetchTimeout(timeoutMs),
@@ -1328,10 +1331,17 @@ export async function runDirectOllamaAgent(
       : await classifyIntent(input.prompt);
     const classifiedIntent = intentResult?.intent;
     if (classifiedIntent) {
-      logger.debug(
-        { group: group.name, intent: classifiedIntent, confidence: intentResult?.confidence },
-        'Intent classified',
+      logger.info(
+        {
+          group: group.name,
+          intent: classifiedIntent,
+          confidence: intentResult?.confidence,
+          entities: intentResult?.entities,
+        },
+        '[intent] applied to tool selection',
       );
+    } else {
+      logger.info({ group: group.name }, '[intent] no filtering applied — using all tools');
     }
 
     // Use the already-resolved model for all rounds in this session
@@ -1347,9 +1357,10 @@ export async function runDirectOllamaAgent(
     let previousFailedToolCallSignature: string | undefined;
     let repeatedFailedToolCallCount = 0;
     const knownToolNames = new Set(
-      getOllamaToolDefinitions({ isMain: input.isMain, intent: classifiedIntent }).map(
-        (t) => t.function.name,
-      ),
+      getOllamaToolDefinitions({
+        isMain: input.isMain,
+        intent: classifiedIntent,
+      }).map((t) => t.function.name),
     );
     toolLoop: for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
       const parsed = await chatWithOllama(requestMessages, timeoutMs, {

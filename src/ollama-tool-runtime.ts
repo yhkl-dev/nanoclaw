@@ -2059,11 +2059,41 @@ const INTENT_ALLOWED_GROUPS: Record<string, string[] | null> = {
   calendar_create: ['calendar_'],
   calendar_delete: ['calendar_'],
   system_stats: ['system_stats'],
-  read_file: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
-  write_file: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
-  run_bash: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
-  bash_exec: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
-  search_files: ['bash_exec', 'read_file', 'write_file', 'list_dir', 'search_files'],
+  read_file: [
+    'bash_exec',
+    'read_file',
+    'write_file',
+    'list_dir',
+    'search_files',
+  ],
+  write_file: [
+    'bash_exec',
+    'read_file',
+    'write_file',
+    'list_dir',
+    'search_files',
+  ],
+  run_bash: [
+    'bash_exec',
+    'read_file',
+    'write_file',
+    'list_dir',
+    'search_files',
+  ],
+  bash_exec: [
+    'bash_exec',
+    'read_file',
+    'write_file',
+    'list_dir',
+    'search_files',
+  ],
+  search_files: [
+    'bash_exec',
+    'read_file',
+    'write_file',
+    'list_dir',
+    'search_files',
+  ],
   // unknown / undefined = no filtering
   unknown: null,
 };
@@ -2078,11 +2108,22 @@ function filterToolsByIntent(
   if (allowed === null) return tools; // no filtering
 
   // memory_write is always included as baseline
-  return tools.filter((t) => {
+  const filtered = tools.filter((t) => {
     const name = t.function.name;
     if (name === 'memory_write') return true;
     return allowed.some((prefix) => name.startsWith(prefix) || name === prefix);
   });
+
+  logger.info(
+    {
+      intent,
+      toolsBefore: tools.length,
+      toolsAfter: filtered.length,
+      toolNames: filtered.map((t) => t.function.name),
+    },
+    '[intent] tool list filtered by intent',
+  );
+  return filtered;
 }
 
 export function getOllamaToolDefinitions(opts?: {

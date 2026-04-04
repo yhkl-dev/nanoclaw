@@ -10,10 +10,6 @@ const CACHE_DIR = path.join(process.cwd(), '.cache/intent-cache');
 const DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const CLASSIFY_TIMEOUT_MS = 4_000;
 
-/**
- * LLM 意图分类器
- * 使用 LLM 对用户消息进行意图识别和参数提取
- */
 export class LLMIntentClassifier {
   private config: LLMClassifierConfig;
   private stats: ClassifierStats;
@@ -29,12 +25,12 @@ export class LLMIntentClassifier {
     };
   }
 
-  /**
-   * 分类用户消息的意图
-   */
   async classify(userMessage: string): Promise<IntentResult> {
     const startTime = Date.now();
     this.stats.totalRequests++;
+
+    const preview = userMessage.slice(0, 60) + (userMessage.length > 60 ? '…' : '');
+    logger.info({ model: this.config.modelId, preview }, '[intent] classifying message');
 
     // 检查缓存
     if (this.config.cacheEnabled) {
@@ -42,6 +38,10 @@ export class LLMIntentClassifier {
       if (cached) {
         this.stats.cachedRequests++;
         this.updateIntentStats(cached.intent);
+        logger.info(
+          { intent: cached.intent, confidence: cached.confidence, source: 'cache' },
+          '[intent] result (cache hit)',
+        );
         return { ...cached, rawPrompt: userMessage };
       }
     }
@@ -68,16 +68,17 @@ export class LLMIntentClassifier {
     this.stats.intentsUsed.set(intent, (this.stats.intentsUsed.get(intent) ?? 0) + 1);
   }
 
-  /**
-   * 调用 LLM 进行分类
-   */
   private async callLLM(userMessage: string): Promise<IntentResult> {
     const host = OLLAMA_HOST;
     const model = this.config.modelId || OLLAMA_FAST_MODEL || OLLAMA_MODEL;
 
     if (!host || !model) {
+      logger.warn('[intent] OLLAMA_HOST or model not set, falling back to keyword match');
       return this.fallbackKeywordMatch(userMessage);
     }
+
+    const t0 = Date.now();
+    logger.info({ model, host }, '[intent] calling LLM for classification');
 
     try {
       const systemPrompt = `You are an intent classification assistant. Analyze the user's message and identify the most likely intent.
@@ -126,29 +127,39 @@ User: "系统内存使用率" -> {"intent":"system_stats","confidence":0.95}`;
 
       const parsed = JSON.parse(rawText) as { message?: { content?: string } };
       const content = parsed.message?.content ?? '';
+      const latencyMs = Date.now() - t0;
 
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
+        logger.warn({ latencyMs, raw: content.slice(0, 200) }, '[intent] LLM returned no JSON, falling back to keyword match');
         return this.fallbackKeywordMatch(userMessage);
       }
 
       const result = JSON.parse(jsonMatch[0]) as IntentResult;
       if (!result.intent || typeof result.confidence !== 'number') {
+        logger.warn({ latencyMs, parsed: result }, '[intent] LLM result missing fields, falling back to keyword match');
         return this.fallbackKeywordMatch(userMessage);
       }
 
       result.entities = result.entities ?? {};
       result.rawPrompt = userMessage;
+
+      logger.info(
+        { intent: result.intent, confidence: result.confidence, entities: result.entities, latencyMs, source: 'llm' },
+        '[intent] result (LLM)',
+      );
       return result;
     } catch (error) {
-      logger.debug({ err: error }, 'Intent LLM classification failed, using keyword fallback');
+      const latencyMs = Date.now() - t0;
+      const isTimeout = error instanceof Error && error.name === 'AbortError';
+      logger.warn(
+        { err: isTimeout ? 'timeout' : String(error), latencyMs },
+        isTimeout ? '[intent] LLM timed out, falling back to keyword match' : '[intent] LLM error, falling back to keyword match',
+      );
       return this.fallbackKeywordMatch(userMessage);
     }
   }
 
-  /**
-   * 关键词匹配回退
-   */
   private fallbackKeywordMatch(message: string): IntentResult {
     const m = message.toLowerCase();
 
@@ -169,10 +180,12 @@ User: "系统内存使用率" -> {"intent":"system_stats","confidence":0.95}`;
 
     for (const [intent, keywords] of rules) {
       if (keywords.some((k) => m.includes(k))) {
+        logger.info({ intent, confidence: 0.65, source: 'keyword' }, '[intent] result (keyword fallback)');
         return { intent, confidence: 0.65, rawPrompt: message };
       }
     }
 
+    logger.info({ intent: 'chat', confidence: 0.5, source: 'default' }, '[intent] result (default chat)');
     return { intent: 'chat', confidence: 0.5, rawPrompt: message };
   }
 
@@ -225,8 +238,10 @@ let _classifier: LLMIntentClassifier | null = null;
 
 function getClassifier(): LLMIntentClassifier {
   if (!_classifier) {
+    const model = OLLAMA_FAST_MODEL ?? OLLAMA_MODEL ?? '';
+    logger.info({ model }, '[intent] initializing classifier');
     _classifier = new LLMIntentClassifier({
-      modelId: OLLAMA_FAST_MODEL ?? OLLAMA_MODEL ?? '',
+      modelId: model,
       cacheEnabled: true,
       cacheTtlMs: DEFAULT_CACHE_TTL_MS,
       fallbackIntent: 'unknown',
@@ -245,9 +260,20 @@ export async function classifyIntent(message: string): Promise<IntentResult | nu
       getClassifier().classify(message),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), CLASSIFY_TIMEOUT_MS + 500)),
     ]);
-    if (!result || result.confidence < 0.6) return null;
+    if (!result) {
+      logger.warn('[intent] classification timed out, using all tools');
+      return null;
+    }
+    if (result.confidence < 0.6) {
+      logger.info(
+        { intent: result.intent, confidence: result.confidence },
+        '[intent] confidence too low (<0.6), using all tools',
+      );
+      return null;
+    }
     return result;
-  } catch {
+  } catch (err) {
+    logger.warn({ err }, '[intent] classifyIntent threw, using all tools');
     return null;
   }
 }
