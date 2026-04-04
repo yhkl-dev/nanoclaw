@@ -1080,41 +1080,64 @@ async function chatWithOllama(
   timeoutMs: number,
   opts?: { isMain?: boolean; model?: string; prompt?: string },
 ): Promise<OllamaChatResponse> {
-  const model = opts?.model ?? selectOllamaModel(opts?.prompt ?? '', undefined) ?? OLLAMA_MODEL;
-  const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      stream: false,
-      messages,
-      tools: getOllamaToolDefinitions({ isMain: opts?.isMain }),
-      think: OLLAMA_THINK,
-    }),
-    signal: createFetchTimeout(timeoutMs),
-  });
+  const model =
+    opts?.model ??
+    selectOllamaModel(opts?.prompt ?? '', undefined) ??
+    OLLAMA_MODEL;
 
-  const rawText = await response.text();
-  if (!response.ok) {
-    throw new Error(
-      `Ollama API ${response.status}: ${rawText.slice(0, 400) || response.statusText}`,
+  async function attemptChat(attemptModel: string): Promise<OllamaChatResponse> {
+    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: attemptModel,
+        stream: false,
+        messages,
+        tools: getOllamaToolDefinitions({ isMain: opts?.isMain }),
+        think: OLLAMA_THINK,
+      }),
+      signal: createFetchTimeout(timeoutMs),
+    });
+
+    const rawText = await response.text();
+    if (!response.ok) {
+      throw new Error(
+        `Ollama API ${response.status}: ${rawText.slice(0, 400) || response.statusText}`,
+      );
+    }
+
+    const parsed = JSON.parse(rawText) as OllamaChatResponse;
+    if (parsed.error) {
+      throw new Error(`Ollama error: ${parsed.error}`);
+    }
+    logger.warn(
+      {
+        model: attemptModel,
+        hasToolCalls: !!parsed.message?.tool_calls?.length,
+        toolCalls: parsed.message?.tool_calls?.map((c) => c.function.name),
+        contentPreview: parsed.message?.content?.slice(0, 120),
+      },
+      'Ollama raw response',
     );
+    return parsed;
   }
 
-  const parsed = JSON.parse(rawText) as OllamaChatResponse;
-  if (parsed.error) {
-    throw new Error(`Ollama error: ${parsed.error}`);
+  try {
+    return await attemptChat(model);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const isModelNotFound =
+      /model.*not found|try pulling it first|unknown model/i.test(errMsg) ||
+      errMsg.includes('404');
+    if (isModelNotFound && OLLAMA_MODEL && model !== OLLAMA_MODEL) {
+      logger.warn(
+        { requestedModel: model, fallbackModel: OLLAMA_MODEL, error: errMsg },
+        'Requested Ollama model not found — falling back to default model',
+      );
+      return await attemptChat(OLLAMA_MODEL);
+    }
+    throw err;
   }
-  logger.warn(
-    {
-      model,
-      hasToolCalls: !!parsed.message?.tool_calls?.length,
-      toolCalls: parsed.message?.tool_calls?.map((c) => c.function.name),
-      contentPreview: parsed.message?.content?.slice(0, 120),
-    },
-    'Ollama raw response',
-  );
-  return parsed;
 }
 
 function getScriptEnvironment(groupFolder: string): NodeJS.ProcessEnv {

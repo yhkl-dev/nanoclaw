@@ -24,6 +24,7 @@ const envConfig = readEnvFile([
   'MODEL_BACKEND',
   'OLLAMA_ADMIN_TOOLS',
   'OLLAMA_ENABLE_HOST_SCRIPTS',
+  'OLLAMA_FAST_MODEL',
   'OLLAMA_HOST',
   'OLLAMA_HTTP_ALLOW_PRIVATE',
   'OLLAMA_HTTP_MAX_REDIRECTS',
@@ -88,6 +89,10 @@ export const OLLAMA_HTTP_TIMEOUT_MS = Math.max(
   ) || 20_000,
 );
 export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || envConfig.OLLAMA_MODEL;
+// OLLAMA_FAST_MODEL: optional smaller/faster model for simple conversational messages.
+// When set, short prompts that don't require tools or complex reasoning are routed here.
+export const OLLAMA_FAST_MODEL =
+  process.env.OLLAMA_FAST_MODEL || envConfig.OLLAMA_FAST_MODEL || undefined;
 export const OLLAMA_SESSION_RECENT_MESSAGES = Math.max(
   2,
   parseInt(
@@ -230,6 +235,4 @@ export const RSS_POLL_INTERVAL_MS = Math.max(
 // Keywords are matched case-insensitively against the full prompt.
 // First match wins; falls back to OLLAMA_MODEL if no rule matches.
 export const OLLAMA_MODEL_ROUTES: string | undefined =
-  process.env.OLLAMA_MODEL_ROUTES ||
-  envConfig.OLLAMA_MODEL_ROUTES ||
-  undefined;
+  process.env.OLLAMA_MODEL_ROUTES || envConfig.OLLAMA_MODEL_ROUTES || undefined;

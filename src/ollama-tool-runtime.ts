@@ -7,6 +7,7 @@ import { google } from 'googleapis';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
 import {
+  GROUPS_DIR,
   OLLAMA_ADMIN_TOOLS,
   OLLAMA_HTTP_ALLOW_PRIVATE,
   OLLAMA_HTTP_MAX_REDIRECTS,
@@ -1322,6 +1323,27 @@ async function executeToolCall(
       toolCall.function.arguments as Record<string, unknown>,
     );
   }
+  if (toolCall.function.name === 'memory_write') {
+    const { note, section } = toolCall.function.arguments as {
+      note: string;
+      section?: string;
+    };
+    if (!note || typeof note !== 'string') {
+      return JSON.stringify({ error: 'note must be a non-empty string' });
+    }
+    const groupDir = path.join(GROUPS_DIR, context.groupFolder);
+    const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const header = section ? `\n## ${section} (${timestamp})\n` : `\n<!-- ${timestamp} -->\n`;
+    const entry = `${header}${note.trim()}\n`;
+    fs.mkdirSync(groupDir, { recursive: true });
+    fs.appendFileSync(claudeMdPath, entry, 'utf-8');
+    logger.info(
+      { group: context.groupFolder, section, chars: note.length },
+      'memory_write: appended to CLAUDE.md',
+    );
+    return JSON.stringify({ ok: true, path: claudeMdPath });
+  }
   throw new Error(`Unsupported tool: ${toolCall.function.name}`);
 }
 
@@ -1616,7 +1638,14 @@ async function executeSystemStats(): Promise<string> {
     await Promise.all([
       run('cat', ['/proc/cpuinfo']),
       run('cat', ['/proc/meminfo']),
-      run('df', ['-h', '--output=source,size,used,avail,pcent,target', '-x', 'tmpfs', '-x', 'devtmpfs']),
+      run('df', [
+        '-h',
+        '--output=source,size,used,avail,pcent,target',
+        '-x',
+        'tmpfs',
+        '-x',
+        'devtmpfs',
+      ]),
       run('cat', ['/proc/uptime']),
       run('cat', ['/sys/class/thermal/thermal_zone0/temp']),
       run('cat', ['/proc/loadavg']),
@@ -1629,13 +1658,20 @@ async function executeSystemStats(): Promise<string> {
     if (m) memLines[m[1]] = parseInt(m[2]);
   }
   const totalMem = Math.round((memLines['MemTotal'] ?? 0) / 1024);
-  const freeMem = Math.round(((memLines['MemFree'] ?? 0) + (memLines['Buffers'] ?? 0) + (memLines['Cached'] ?? 0)) / 1024);
+  const freeMem = Math.round(
+    ((memLines['MemFree'] ?? 0) +
+      (memLines['Buffers'] ?? 0) +
+      (memLines['Cached'] ?? 0)) /
+      1024,
+  );
   const usedMem = totalMem - freeMem;
 
   // Parse CPU model
-  const cpuModel = cpuInfo.match(/Hardware\s*:\s*(.+)/)?.[1] ||
+  const cpuModel =
+    cpuInfo.match(/Hardware\s*:\s*(.+)/)?.[1] ||
     cpuInfo.match(/model name\s*:\s*(.+)/)?.[1] ||
-    cpuInfo.match(/Processor\s*:\s*(.+)/)?.[1] || 'unknown';
+    cpuInfo.match(/Processor\s*:\s*(.+)/)?.[1] ||
+    'unknown';
   const cpuCores = (cpuInfo.match(/^processor/gm) ?? []).length;
 
   // Uptime
@@ -1647,14 +1683,26 @@ async function executeSystemStats(): Promise<string> {
 
   // CPU temperature
   const tempRaw = parseInt(tempInfo || '0');
-  const tempC = tempRaw > 1000 ? (tempRaw / 1000).toFixed(1) : tempRaw.toString();
+  const tempC =
+    tempRaw > 1000 ? (tempRaw / 1000).toFixed(1) : tempRaw.toString();
 
   // Load average
   const [load1, load5, load15] = (loadInfo || '').split(' ');
 
   return JSON.stringify({
-    cpu: { model: cpuModel.trim(), cores: cpuCores, load_1m: load1, load_5m: load5, load_15m: load15 },
-    memory: { total_mb: totalMem, used_mb: usedMem, free_mb: freeMem, usage_pct: Math.round((usedMem / totalMem) * 100) },
+    cpu: {
+      model: cpuModel.trim(),
+      cores: cpuCores,
+      load_1m: load1,
+      load_5m: load5,
+      load_15m: load15,
+    },
+    memory: {
+      total_mb: totalMem,
+      used_mb: usedMem,
+      free_mb: freeMem,
+      usage_pct: Math.round((usedMem / totalMem) * 100),
+    },
     temperature_c: parseFloat(tempC),
     uptime: uptimeStr,
     disk: diskInfo,
@@ -1701,7 +1749,8 @@ async function executeGithubTool(
       },
       ...(proxyOpts as RequestInit),
     });
-    if (!res.ok) throw new Error(`GitHub API ${res.status}: ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`GitHub API ${res.status}: ${await res.text()}`);
     return res.json();
   };
 
@@ -1738,7 +1787,10 @@ async function executeGithubTool(
       total_count: number;
       items: Array<Record<string, unknown>>;
     };
-    return JSON.stringify({ total: data.total_count, items: data.items.slice(0, 10) });
+    return JSON.stringify({
+      total: data.total_count,
+      items: data.items.slice(0, 10),
+    });
   }
 
   throw new Error(`Unknown GitHub tool: ${toolName}`);
@@ -1758,7 +1810,8 @@ function getGithubToolDefinitions(): OllamaToolDefinition[] {
           properties: {
             all: {
               type: 'boolean',
-              description: 'If true, return all notifications including read ones. Default false (unread only).',
+              description:
+                'If true, return all notifications including read ones. Default false (unread only).',
             },
           },
           required: [],
@@ -1776,7 +1829,8 @@ function getGithubToolDefinitions(): OllamaToolDefinition[] {
             query: { type: 'string', description: 'GitHub search query.' },
             type: {
               type: 'string',
-              description: 'Search type: "repositories", "issues", or "users". Default "repositories".',
+              description:
+                'Search type: "repositories", "issues", or "users". Default "repositories".',
             },
           },
           required: ['query'],
@@ -1812,7 +1866,8 @@ async function executeBarkPush(args: Record<string, unknown>): Promise<string> {
     ...(proxyOpts as RequestInit),
   });
 
-  if (!res.ok) throw new Error(`Bark push failed: ${res.status} ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(`Bark push failed: ${res.status} ${await res.text()}`);
   const data = (await res.json()) as { code?: number; message?: string };
   return JSON.stringify({ ok: true, message: data.message ?? 'sent' });
 }
@@ -1825,17 +1880,24 @@ function getBarkToolDefinitions(): OllamaToolDefinition[] {
       function: {
         name: 'bark_push',
         description:
-          'Send a push notification to the user\'s iPhone via Bark app. Use when the user asks to be notified on their phone, or when sending an important alert that should interrupt them. Only use when explicitly requested.',
+          "Send a push notification to the user's iPhone via Bark app. Use when the user asks to be notified on their phone, or when sending an important alert that should interrupt them. Only use when explicitly requested.",
         parameters: {
           type: 'object',
           properties: {
             title: { type: 'string', description: 'Notification title.' },
             body: { type: 'string', description: 'Notification body text.' },
-            url: { type: 'string', description: 'Optional URL to open when tapped.' },
-            sound: { type: 'string', description: 'Notification sound name (default "default").' },
+            url: {
+              type: 'string',
+              description: 'Optional URL to open when tapped.',
+            },
+            sound: {
+              type: 'string',
+              description: 'Notification sound name (default "default").',
+            },
             level: {
               type: 'string',
-              description: '"active" (default), "timeSensitive" (bypasses focus), or "passive" (silent).',
+              description:
+                '"active" (default), "timeSensitive" (bypasses focus), or "passive" (silent).',
             },
           },
           required: ['title', 'body'],
@@ -1844,7 +1906,6 @@ function getBarkToolDefinitions(): OllamaToolDefinition[] {
     },
   ];
 }
-
 
 function getTavilyToolDefinitions(): OllamaToolDefinition[] {
   if (!TAVILY_API_KEY) return [];
@@ -2077,6 +2138,29 @@ export function getOllamaToolDefinitions(opts?: {
     ...getSystemStatsToolDefinitions(),
     ...getGithubToolDefinitions(),
     ...getBarkToolDefinitions(),
+    {
+      type: 'function',
+      function: {
+        name: 'memory_write',
+        description:
+          "Append a note to this group's CLAUDE.md memory file. Use this to persist important facts, preferences, or context that should be remembered across future conversations. Notes are appended and never overwrite existing content.",
+        parameters: {
+          type: 'object',
+          properties: {
+            note: {
+              type: 'string',
+              description: 'The text to append. Keep it concise and factual.',
+            },
+            section: {
+              type: 'string',
+              description:
+                'Optional section header (e.g. "User preferences", "Project context"). Creates a markdown ## heading.',
+            },
+          },
+          required: ['note'],
+        },
+      },
+    },
   ];
 }
 

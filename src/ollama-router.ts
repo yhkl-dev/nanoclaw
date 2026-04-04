@@ -1,4 +1,4 @@
-import { OLLAMA_MODEL, OLLAMA_MODEL_ROUTES } from './config.js';
+import { OLLAMA_FAST_MODEL, OLLAMA_MODEL, OLLAMA_MODEL_ROUTES } from './config.js';
 
 export interface OllamaModelRoute {
   keyword: string;
@@ -9,13 +9,42 @@ let parsedRoutes: OllamaModelRoute[] | undefined;
 // Injected during tests to bypass module-level const binding
 let _testRoutesOverride: string | null = null;
 let _testModelOverride: string | null = null;
+let _testFastModelOverride: string | null = null;
 
 function getRoutesString(): string | undefined {
-  return _testRoutesOverride !== null ? _testRoutesOverride : OLLAMA_MODEL_ROUTES;
+  return _testRoutesOverride !== null
+    ? _testRoutesOverride
+    : OLLAMA_MODEL_ROUTES;
 }
 
 function getDefaultModel(): string | undefined {
   return _testModelOverride !== null ? _testModelOverride : OLLAMA_MODEL;
+}
+
+function getFastModel(): string | undefined {
+  return _testFastModelOverride !== null
+    ? _testFastModelOverride
+    : OLLAMA_FAST_MODEL;
+}
+
+/**
+ * Heuristically detect whether a prompt is "simple" enough to route to a fast
+ * model. Returns true for short conversational messages that don't need tools,
+ * code, or complex reasoning.
+ */
+export function isSimplePrompt(prompt: string): boolean {
+  const trimmed = prompt.trim();
+  // Long prompts are never simple
+  if (trimmed.length > 200) return false;
+  // Contains code, file paths, URLs, or structured data → complex
+  if (/```|<[a-z]+>|https?:\/\/|\/[a-z0-9_/-]{3,}|\bimport\b|\bfunction\b|\bclass\b/i.test(trimmed)) return false;
+  // Contains math or technical operators → complex
+  if (/[+\-*/=<>]{2,}|\b(sql|api|json|xml|csv|bash|grep|awk|sed)\b/i.test(trimmed)) return false;
+  // Scheduling/task keywords → likely needs tools
+  if (/\b(search|find|fetch|get|send|create|delete|list|check|run|execute|schedule|remind)\b/i.test(trimmed)) return false;
+  // Multi-sentence: probably needs analysis
+  if ((trimmed.match(/[.!?]/g) || []).length >= 3) return false;
+  return true;
 }
 
 /**
@@ -52,7 +81,8 @@ export function getOllamaModelRoutes(): OllamaModelRoute[] {
  * Priority:
  * 1. Per-group model override (groupModel param)
  * 2. Keyword routing rules (OLLAMA_MODEL_ROUTES)
- * 3. Default model (OLLAMA_MODEL)
+ * 3. Fast model for simple conversational messages (OLLAMA_FAST_MODEL)
+ * 4. Default model (OLLAMA_MODEL)
  */
 export function selectOllamaModel(
   prompt: string,
@@ -70,14 +100,22 @@ export function selectOllamaModel(
     }
   }
 
+  const fastModel = getFastModel();
+  if (fastModel && isSimplePrompt(prompt)) {
+    return fastModel;
+  }
+
   return getDefaultModel();
 }
 
 // Exported for testing only — reset the lazy cache so tests can vary config.
 export function _resetOllamaModelRoutesCache(
-  opts: { routes?: string; defaultModel?: string } = {},
+  opts: { routes?: string; defaultModel?: string; fastModel?: string } = {},
 ): void {
   parsedRoutes = undefined;
   _testRoutesOverride = 'routes' in opts ? (opts.routes ?? '') : null;
-  _testModelOverride = 'defaultModel' in opts ? (opts.defaultModel ?? null) : null;
+  _testModelOverride =
+    'defaultModel' in opts ? (opts.defaultModel ?? null) : null;
+  _testFastModelOverride =
+    'fastModel' in opts ? (opts.fastModel ?? null) : null;
 }
