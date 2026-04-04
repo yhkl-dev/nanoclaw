@@ -1243,7 +1243,9 @@ async function runScript(
  * Returns null if no message block found.
  */
 function extractLastUserMessage(prompt: string): string | null {
-  const matches = [...prompt.matchAll(/<message\b[^>]*>([\s\S]*?)<\/message>/gi)];
+  const matches = [
+    ...prompt.matchAll(/<message\b[^>]*>([\s\S]*?)<\/message>/gi),
+  ];
   if (!matches.length) return null;
   return matches[matches.length - 1][1].trim() || null;
 }

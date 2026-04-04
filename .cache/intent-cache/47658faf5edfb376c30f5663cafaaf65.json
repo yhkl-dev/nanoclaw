@@ -1,0 +1,1 @@
+{"intent":"chat","confidence":0.5,"rawPrompt":"<context timezone=\"Asia/Shanghai\" />\n<messages>\n<message sender=\"YangKai\" time=\"Apr 4, 2026, 2:00 PM\">下周一休息，帮我改成下周实际的周三和周五</message>\n</messages>"}

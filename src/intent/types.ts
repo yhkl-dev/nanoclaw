@@ -38,6 +38,7 @@ export type Intent =
 export interface IntentResult {
   intent: Intent;
   confidence: number;
+  recommended_engine?: 'local' | 'claude'; // Added field
   entities?: {
     [key: string]: string;
   };

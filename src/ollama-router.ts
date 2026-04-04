@@ -1,4 +1,8 @@
-import { OLLAMA_FAST_MODEL, OLLAMA_MODEL, OLLAMA_MODEL_ROUTES } from './config.js';
+import {
+  OLLAMA_FAST_MODEL,
+  OLLAMA_MODEL,
+  OLLAMA_MODEL_ROUTES,
+} from './config.js';
 
 export interface OllamaModelRoute {
   keyword: string;
@@ -37,11 +41,24 @@ export function isSimplePrompt(prompt: string): boolean {
   // Long prompts are never simple
   if (trimmed.length > 200) return false;
   // Contains code, file paths, URLs, or structured data → complex
-  if (/```|<[a-z]+>|https?:\/\/|\/[a-z0-9_/-]{3,}|\bimport\b|\bfunction\b|\bclass\b/i.test(trimmed)) return false;
+  if (
+    /```|<[a-z]+>|https?:\/\/|\/[a-z0-9_/-]{3,}|\bimport\b|\bfunction\b|\bclass\b/i.test(
+      trimmed,
+    )
+  )
+    return false;
   // Contains math or technical operators → complex
-  if (/[+\-*/=<>]{2,}|\b(sql|api|json|xml|csv|bash|grep|awk|sed)\b/i.test(trimmed)) return false;
+  if (
+    /[+\-*/=<>]{2,}|\b(sql|api|json|xml|csv|bash|grep|awk|sed)\b/i.test(trimmed)
+  )
+    return false;
   // Scheduling/task keywords → likely needs tools
-  if (/\b(search|find|fetch|get|send|create|delete|list|check|run|execute|schedule|remind)\b/i.test(trimmed)) return false;
+  if (
+    /\b(search|find|fetch|get|send|create|delete|list|check|run|execute|schedule|remind)\b/i.test(
+      trimmed,
+    )
+  )
+    return false;
   // Multi-sentence: probably needs analysis
   if ((trimmed.match(/[.!?]/g) || []).length >= 3) return false;
   return true;

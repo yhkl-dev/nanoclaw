@@ -671,9 +671,7 @@ async function main(): Promise<void> {
           const args = rssMatch[1] ?? '';
           handleRssCommand(args, group.folder, chatJid, (text) => {
             const ch = channel ?? findChannel(channels, chatJid);
-            return ch
-              ? ch.sendMessage(chatJid, text)
-              : Promise.resolve();
+            return ch ? ch.sendMessage(chatJid, text) : Promise.resolve();
           }).catch((err) =>
             logger.error({ err, chatJid }, 'RSS command error'),
           );

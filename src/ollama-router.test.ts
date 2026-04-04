@@ -16,23 +16,35 @@ describe('ollama-router', () => {
   });
 
   it('returns per-group model when provided', () => {
-    _resetOllamaModelRoutesCache({ routes: 'code:codellama', defaultModel: 'llama3' });
+    _resetOllamaModelRoutesCache({
+      routes: 'code:codellama',
+      defaultModel: 'llama3',
+    });
     expect(selectOllamaModel('write some code', 'mistral')).toBe('mistral');
   });
 
   it('matches keyword route (case-insensitive)', () => {
-    _resetOllamaModelRoutesCache({ routes: 'code:codellama,image:llava', defaultModel: 'llama3' });
+    _resetOllamaModelRoutesCache({
+      routes: 'code:codellama,image:llava',
+      defaultModel: 'llama3',
+    });
     expect(selectOllamaModel('Write CODE for me')).toBe('codellama');
     expect(selectOllamaModel('describe this IMAGE')).toBe('llava');
   });
 
   it('falls back to default model when no route matches', () => {
-    _resetOllamaModelRoutesCache({ routes: 'code:codellama', defaultModel: 'llama3' });
+    _resetOllamaModelRoutesCache({
+      routes: 'code:codellama',
+      defaultModel: 'llama3',
+    });
     expect(selectOllamaModel('tell me a joke')).toBe('llama3');
   });
 
   it('returns first matching route', () => {
-    _resetOllamaModelRoutesCache({ routes: 'code:codellama,python:mistral', defaultModel: 'llama3' });
+    _resetOllamaModelRoutesCache({
+      routes: 'code:codellama,python:mistral',
+      defaultModel: 'llama3',
+    });
     // "code" appears before "python" in routes
     expect(selectOllamaModel('write python code')).toBe('codellama');
   });
@@ -40,7 +52,9 @@ describe('ollama-router', () => {
 
 describe('getOllamaModelRoutes parsing', () => {
   it('parses valid routes', () => {
-    _resetOllamaModelRoutesCache({ routes: 'code:codellama, image:llava,think:qwen3' });
+    _resetOllamaModelRoutesCache({
+      routes: 'code:codellama, image:llava,think:qwen3',
+    });
     const routes = getOllamaModelRoutes();
     expect(routes).toEqual([
       { keyword: 'code', model: 'codellama' },
@@ -50,7 +64,9 @@ describe('getOllamaModelRoutes parsing', () => {
   });
 
   it('skips malformed entries', () => {
-    _resetOllamaModelRoutesCache({ routes: 'code:codellama,badentry,:nokey,nomodel:' });
+    _resetOllamaModelRoutesCache({
+      routes: 'code:codellama,badentry,:nokey,nomodel:',
+    });
     const routes = getOllamaModelRoutes();
     expect(routes).toEqual([{ keyword: 'code', model: 'codellama' }]);
   });

@@ -92,7 +92,8 @@ function parseRssFeed(xml: string): ParsedFeed {
   const channelXml = channelMatch ? channelMatch[1] : xml;
 
   // Feed title: the first <title> not inside an <item>
-  const feedTitleRaw = channelXml.match(/^[\s\S]*?(?=<item\b)/i)?.[0] ?? channelXml;
+  const feedTitleRaw =
+    channelXml.match(/^[\s\S]*?(?=<item\b)/i)?.[0] ?? channelXml;
   const feedTitle = extractTag(feedTitleRaw, 'title');
 
   const itemBlocks = extractTagAll(channelXml, 'item');
@@ -104,17 +105,18 @@ function parseRssFeed(xml: string): ParsedFeed {
       '';
     const pubDate =
       extractTag(block, 'pubDate') ?? extractTag(block, 'dc:date');
-    const description = extractTag(block, 'description') ?? extractTag(block, 'content:encoded');
+    const description =
+      extractTag(block, 'description') ?? extractTag(block, 'content:encoded');
     const guid =
-      extractTag(block, 'guid') ||
-      link ||
-      `${title}-${pubDate ?? ''}`;
+      extractTag(block, 'guid') || link || `${title}-${pubDate ?? ''}`;
     return {
       guid: guid.trim(),
       title: title || '(no title)',
       link: link.trim(),
       pubDate: pubDate?.trim() ?? null,
-      description: description ? textContentStripped(description).slice(0, 300) : null,
+      description: description
+        ? textContentStripped(description).slice(0, 300)
+        : null,
     };
   });
 
@@ -136,10 +138,7 @@ function parseAtomFeed(xml: string): ParsedFeed {
       extractTag(block, 'dc:date');
     const description =
       extractTag(block, 'summary') ?? extractTag(block, 'content');
-    const guid =
-      extractTag(block, 'id') ||
-      link ||
-      `${title}-${pubDate ?? ''}`;
+    const guid = extractTag(block, 'id') || link || `${title}-${pubDate ?? ''}`;
     return {
       guid: guid.trim(),
       title: title || '(no title)',
@@ -167,7 +166,10 @@ async function fetchFeed(url: string): Promise<string> {
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'NanoClaw-RSS/1.0', Accept: 'application/rss+xml,application/atom+xml,text/xml,*/*' },
+      headers: {
+        'User-Agent': 'NanoClaw-RSS/1.0',
+        Accept: 'application/rss+xml,application/atom+xml,text/xml,*/*',
+      },
       signal: controller.signal,
     });
     if (!res.ok) {
@@ -217,7 +219,9 @@ export async function handleRssCommand(
         markRssItemSeen(sub.id, item.guid);
       }
       updateRssSubscriptionFetched(sub.id, new Date().toISOString());
-      await sendReply(`✅ 已订阅：${title}\n共发现 ${feed.items.length} 条已有条目（不会重复推送）。`);
+      await sendReply(
+        `✅ 已订阅：${title}\n共发现 ${feed.items.length} 条已有条目（不会重复推送）。`,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ url, err: msg }, 'RSS add: failed to fetch feed');
@@ -232,8 +236,12 @@ export async function handleRssCommand(
       await sendReply('当前没有 RSS 订阅。\n' + USAGE);
       return;
     }
-    const lines = subs.map((s, i) => `${i + 1}. ${s.title ?? s.url}\n   ${s.url}`);
-    await sendReply(`📋 RSS 订阅列表（共 ${subs.length} 条）：\n${lines.join('\n\n')}\n\n删除：/rss del <序号>`);
+    const lines = subs.map(
+      (s, i) => `${i + 1}. ${s.title ?? s.url}\n   ${s.url}`,
+    );
+    await sendReply(
+      `📋 RSS 订阅列表（共 ${subs.length} 条）：\n${lines.join('\n\n')}\n\n删除：/rss del <序号>`,
+    );
     return;
   }
 
@@ -262,7 +270,11 @@ async function pollOnce(deps: RssAggregatorDeps): Promise<void> {
       await pollSubscription(sub, deps);
     } catch (err) {
       logger.warn(
-        { subscriptionId: sub.id, url: sub.url, err: err instanceof Error ? err.message : String(err) },
+        {
+          subscriptionId: sub.id,
+          url: sub.url,
+          err: err instanceof Error ? err.message : String(err),
+        },
         'RSS poll error',
       );
     }
@@ -281,7 +293,9 @@ async function pollSubscription(
     updateRssSubscriptionTitle(sub.id, feed.title);
   }
 
-  const newItems = feed.items.filter((item) => !isRssItemSeen(sub.id, item.guid));
+  const newItems = feed.items.filter(
+    (item) => !isRssItemSeen(sub.id, item.guid),
+  );
 
   if (newItems.length > 0) {
     // Deliver newest-first (reversed) in batches to avoid too-long messages
@@ -296,7 +310,10 @@ async function pollSubscription(
       try {
         await deps.sendMessage(sub.chat_jid, lines.join('\n'));
       } catch (err) {
-        logger.warn({ chatJid: sub.chat_jid, err }, 'RSS: failed to send message');
+        logger.warn(
+          { chatJid: sub.chat_jid, err },
+          'RSS: failed to send message',
+        );
       }
     }
     for (const item of newItems) {
