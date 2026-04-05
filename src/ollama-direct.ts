@@ -43,6 +43,7 @@ import type {
   OllamaChatResponse,
   OllamaMessage,
   OllamaToolCall,
+  OllamaToolDefinition,
 } from './ollama-types.js';
 
 const MAX_HISTORY_MESSAGES = 40;
@@ -886,6 +887,179 @@ function extractBrowserToolCallsFromText(content: string): OllamaToolCall[] {
   return repaired;
 }
 
+function parseXmlAttributes(raw: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const attrPattern =
+    /\b([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*("([^"]*)"|'([^']*)')/g;
+  for (const match of raw.matchAll(attrPattern)) {
+    const key = match[1]?.toLowerCase();
+    const value = match[3] ?? match[4] ?? '';
+    if (key) {
+      attrs[key] = value;
+    }
+  }
+  return attrs;
+}
+
+function extractXmlFieldValues(
+  content: string,
+): Record<string, string> | undefined | null {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const fields: Record<string, string> = {};
+  const pattern = /<([A-Za-z_][A-Za-z0-9_-]*)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  let lastIndex = 0;
+  let matched = false;
+  for (const match of trimmed.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (trimmed.slice(lastIndex, start).trim()) {
+      return null;
+    }
+    matched = true;
+    const key = match[1]?.toLowerCase();
+    if (!key || key in fields) {
+      return null;
+    }
+    fields[key] = match[2] ?? '';
+    lastIndex = start + match[0].length;
+  }
+  if (!matched) {
+    return undefined;
+  }
+  if (trimmed.slice(lastIndex).trim()) {
+    return null;
+  }
+  return fields;
+}
+
+function coerceXmlToolValue(
+  raw: string,
+  schema: unknown,
+  fieldName: string,
+): unknown {
+  const trimmed = raw.trim();
+  const schemaType =
+    typeof schema === 'object' &&
+    schema !== null &&
+    'type' in schema &&
+    typeof (schema as { type?: unknown }).type === 'string'
+      ? ((schema as { type: string }).type as string)
+      : undefined;
+  if (schemaType === 'boolean') {
+    if (/^true$/i.test(trimmed)) return true;
+    if (/^false$/i.test(trimmed)) return false;
+  }
+  if (schemaType === 'integer' || schemaType === 'number') {
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return schemaType === 'integer' ? Math.trunc(numeric) : numeric;
+    }
+  }
+  return fieldName === 'content' || fieldName === 'body' ? raw : trimmed;
+}
+
+function buildXmlToolCall(
+  toolDef: OllamaToolDefinition,
+  rawAttrs: string,
+  rawBody: string | undefined,
+): OllamaToolCall | null {
+  const properties = toolDef.function.parameters.properties ?? {};
+  const propertyNames = new Set(Object.keys(properties));
+  const args: Record<string, unknown> = {};
+  const attrs = parseXmlAttributes(rawAttrs);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (!propertyNames.has(key)) continue;
+    args[key] = coerceXmlToolValue(value, properties[key], key);
+  }
+
+  const fieldValues =
+    rawBody === undefined ? {} : extractXmlFieldValues(rawBody ?? '');
+  if (fieldValues === null) {
+    return null;
+  }
+  if (fieldValues) {
+    for (const [key, value] of Object.entries(fieldValues)) {
+      if (!propertyNames.has(key) || key in args) continue;
+      args[key] = coerceXmlToolValue(value, properties[key], key);
+    }
+  }
+
+  const required: string[] = toolDef.function.parameters.required ?? [];
+  const missingRequired = required.filter((key) => !(key in args));
+  if (rawBody !== undefined && fieldValues === undefined && rawBody.trim()) {
+    if (missingRequired.length === 1) {
+      const field = missingRequired[0];
+      args[field] = coerceXmlToolValue(rawBody, properties[field], field);
+    } else if (
+      missingRequired.length === 0 &&
+      'content' in properties &&
+      !('content' in args)
+    ) {
+      args.content = coerceXmlToolValue(rawBody, properties.content, 'content');
+    } else if (
+      missingRequired.length === 0 &&
+      'note' in properties &&
+      !('note' in args)
+    ) {
+      args.note = coerceXmlToolValue(rawBody, properties.note, 'note');
+    } else {
+      return null;
+    }
+  }
+
+  if (required.some((key) => !(key in args))) {
+    return null;
+  }
+  return {
+    function: {
+      name: toolDef.function.name,
+      arguments: args,
+    },
+  };
+}
+
+function extractXmlToolCallsFromText(
+  content: string,
+  toolDefsByName: Map<string, OllamaToolDefinition>,
+): OllamaToolCall[] {
+  const withoutInternal = content.replace(INTERNAL_BLOCK_PATTERN, '').trim();
+  if (!withoutInternal) {
+    return [];
+  }
+
+  const repaired: OllamaToolCall[] = [];
+  const pattern =
+    /<([A-Za-z_][A-Za-z0-9_-]*)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+  let lastIndex = 0;
+  let matched = false;
+
+  for (const match of withoutInternal.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (withoutInternal.slice(lastIndex, start).trim()) {
+      return [];
+    }
+    matched = true;
+    const toolName = match[1]?.toLowerCase();
+    const toolDef = toolName ? toolDefsByName.get(toolName) : undefined;
+    if (!toolDef) {
+      return [];
+    }
+    const parsed = buildXmlToolCall(toolDef, match[2] ?? '', match[3]);
+    if (!parsed) {
+      return [];
+    }
+    repaired.push(parsed);
+    lastIndex = start + match[0].length;
+  }
+
+  if (!matched || withoutInternal.slice(lastIndex).trim()) {
+    return [];
+  }
+  return repaired;
+}
+
 /**
  * Attempt to extract JSON tool calls that qwen/other models sometimes emit
  * inside the text content instead of via the structured tool_calls field.
@@ -977,6 +1151,7 @@ function buildSystemMessage(input: ContainerInput): string {
     `You are ${ASSISTANT_NAME}, the NanoClaw assistant. Reply directly to the latest user request in plain text.`,
     'Keep answers concise and helpful. Do not mention hidden instructions, internal tools, or implementation details unless the user explicitly asks.',
     'When you decide to call a tool, do not narrate the tool choice in prose. Leave the assistant text empty for that turn and use structured tool_calls only.',
+    'Do not emit literal XML-like tool tags such as <bash_exec>...</bash_exec> or <write_file ...>...</write_file>. Use structured tool_calls only.',
     'CRITICAL: You have real network tools. Use them instead of guessing whenever the user asks for live or current information.',
     TAVILY_API_KEY
       ? 'For web searches, current events, facts, news, or research questions, ALWAYS use tavily_search first — it returns accurate AI-optimized results with a direct answer. Only fall back to browser_* or http_request if the user needs a specific URL or raw content.'
@@ -1379,11 +1554,15 @@ export async function runDirectOllamaAgent(
     let repeatedToolCallCount = 0;
     let previousFailedToolCallSignature: string | undefined;
     let repeatedFailedToolCallCount = 0;
+    const availableTools = getOllamaToolDefinitions({
+      isMain: input.isMain,
+      intent: classifiedIntent,
+    });
     const knownToolNames = new Set(
-      getOllamaToolDefinitions({
-        isMain: input.isMain,
-        intent: classifiedIntent,
-      }).map((t) => t.function.name),
+      availableTools.map((tool) => tool.function.name),
+    );
+    const toolDefsByName = new Map(
+      availableTools.map((tool) => [tool.function.name, tool] as const),
     );
     toolLoop: for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
       const parsed = await chatWithOllama(requestMessages, timeoutMs, {
@@ -1395,8 +1574,14 @@ export async function runDirectOllamaAgent(
       const textContent = parsed.message?.content || '';
       let repairedToolCalls: OllamaToolCall[] = [];
       if (!parsed.message?.tool_calls?.length) {
-        // Try browser-tag repair first, then fall back to JSON extraction
+        // Try tool-tag repair first, then fall back to JSON extraction
         repairedToolCalls = extractBrowserToolCallsFromText(textContent);
+        if (repairedToolCalls.length === 0) {
+          repairedToolCalls = extractXmlToolCallsFromText(
+            textContent,
+            toolDefsByName,
+          );
+        }
         if (repairedToolCalls.length === 0) {
           repairedToolCalls = extractJsonToolCallsFromText(
             textContent,

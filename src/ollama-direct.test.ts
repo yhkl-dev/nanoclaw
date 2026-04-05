@@ -27,9 +27,8 @@ const mockedConfigFlags = vi.hoisted(() => ({
 }));
 
 vi.mock('./config.js', async () => {
-  const actual = await vi.importActual<typeof import('./config.js')>(
-    './config.js',
-  );
+  const actual =
+    await vi.importActual<typeof import('./config.js')>('./config.js');
   return {
     ...actual,
     ASSISTANT_NAME: 'Henry',
@@ -1068,6 +1067,128 @@ description: Software architecture specialist for system design decisions.
       },
     ]);
     expect(assistantToolTurn?.content).toBe('');
+  });
+
+  it('repairs standalone bash_exec tags into tool calls', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: {
+              role: 'assistant',
+              content:
+                '<bash_exec>\ncd /home/orangepi/github.com/nanoclaw && git status --short\n</bash_exec>',
+            },
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: { role: 'assistant', content: '已检查工作区。' },
+          }),
+      } as Response);
+
+    mockExecFile.mockImplementation(
+      (
+        cmd: string,
+        args: string[],
+        _opts: unknown,
+        cb: (
+          error: Error | null,
+          stdout?: string | Buffer,
+          stderr?: string | Buffer,
+        ) => void,
+      ) => {
+        if (cmd === 'bash' && args[0] === '-c') {
+          return cb(null, ' M src/ollama-direct.ts\n', '');
+        }
+        return cb(new Error(`unexpected exec: ${cmd} ${args.join(' ')}`));
+      },
+    );
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Henry',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: '检查当前 git 状态',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    expect(result.result).toBe('已检查工作区。');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'cd /home/orangepi/github.com/nanoclaw && git status --short'],
+      expect.objectContaining({ cwd: expect.any(String) }),
+      expect.any(Function),
+    );
+    const finalBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(
+      finalBody.messages.some(
+        (message: { role: string; tool_name?: string }) =>
+          message.role === 'tool' && message.tool_name === 'bash_exec',
+      ),
+    ).toBe(true);
+  });
+
+  it('repairs write_file tags with attributes and body into tool calls', async () => {
+    const fetchMock = vi.mocked(fetch);
+    const targetPath = path.join(mockedPaths.tmpRoot, 'xml-write.txt');
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: {
+              role: 'assistant',
+              content: `<write_file file_path="${targetPath}">hello from xml</write_file>`,
+            },
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: { role: 'assistant', content: '已写入文件。' },
+          }),
+      } as Response);
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'Main',
+      trigger: '@Henry',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    const result = await runDirectOllamaAgent(
+      { ...group, folder: 'main' },
+      {
+        prompt: '写一个临时文件',
+        chatJid: 'wecom:YangKai',
+        groupFolder: 'main',
+        isMain: true,
+      },
+    );
+
+    expect(result.result).toBe('已写入文件。');
+    expect(fs.readFileSync(targetPath, 'utf-8')).toBe('hello from xml');
+    const finalBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(
+      finalBody.messages.some(
+        (message: { role: string; tool_name?: string }) =>
+          message.role === 'tool' && message.tool_name === 'write_file',
+      ),
+    ).toBe(true);
   });
 
   it('retries validated HTTP addresses when the first connect attempt fails', async () => {
