@@ -1,0 +1,1 @@
+{"intent":"write_file","confidence":0.95,"entities":{"path":"/root/a.md"},"rawPrompt":"尝试在/root目录下创建一个a.md文件"}

@@ -26,31 +26,39 @@ const mockedConfigFlags = vi.hoisted(() => ({
   ollamaSessionSummaryMaxChars: 160,
 }));
 
-vi.mock('./config.js', () => ({
-  ASSISTANT_NAME: 'Henry',
-  CONTAINER_IMAGE: 'nanoclaw-agent:latest',
-  CONTAINER_TIMEOUT: 30_000,
-  DATA_DIR: mockedPaths.dataDir,
-  GROUPS_DIR: mockedPaths.groupsDir,
-  get OLLAMA_ENABLE_HOST_SCRIPTS() {
-    return mockedConfigFlags.ollamaEnableHostScripts;
-  },
-  OLLAMA_HOST: 'http://192.168.2.19:11434',
-  get OLLAMA_HTTP_ALLOW_PRIVATE() {
-    return mockedConfigFlags.ollamaHttpAllowPrivate;
-  },
-  OLLAMA_HTTP_MAX_REDIRECTS: 5,
-  OLLAMA_HTTP_TIMEOUT_MS: 20_000,
-  OLLAMA_MODEL: 'qwen3-coder:30b',
-  OLLAMA_MODEL_ROUTES: undefined,
-  get OLLAMA_SESSION_RECENT_MESSAGES() {
-    return mockedConfigFlags.ollamaSessionRecentMessages;
-  },
-  get OLLAMA_SESSION_SUMMARY_MAX_CHARS() {
-    return mockedConfigFlags.ollamaSessionSummaryMaxChars;
-  },
-  OLLAMA_THINK: false,
-}));
+vi.mock('./config.js', async () => {
+  const actual = await vi.importActual<typeof import('./config.js')>(
+    './config.js',
+  );
+  return {
+    ...actual,
+    ASSISTANT_NAME: 'Henry',
+    CONTAINER_IMAGE: 'nanoclaw-agent:latest',
+    CONTAINER_TIMEOUT: 30_000,
+    DATA_DIR: mockedPaths.dataDir,
+    GROUPS_DIR: mockedPaths.groupsDir,
+    get OLLAMA_ENABLE_HOST_SCRIPTS() {
+      return mockedConfigFlags.ollamaEnableHostScripts;
+    },
+    OLLAMA_HOST: 'http://192.168.2.19:11434',
+    get OLLAMA_HTTP_ALLOW_PRIVATE() {
+      return mockedConfigFlags.ollamaHttpAllowPrivate;
+    },
+    OLLAMA_HTTP_MAX_REDIRECTS: 5,
+    OLLAMA_HTTP_TIMEOUT_MS: 20_000,
+    OLLAMA_FAST_MODEL: undefined,
+    OLLAMA_MODEL: 'qwen3-coder:30b',
+    OLLAMA_MODEL_ROUTES: undefined,
+    get OLLAMA_SESSION_RECENT_MESSAGES() {
+      return mockedConfigFlags.ollamaSessionRecentMessages;
+    },
+    get OLLAMA_SESSION_SUMMARY_MAX_CHARS() {
+      return mockedConfigFlags.ollamaSessionSummaryMaxChars;
+    },
+    OLLAMA_THINK: false,
+    TAVILY_API_KEY: undefined,
+  };
+});
 
 vi.mock('os', async () => {
   const actual = await vi.importActual<typeof import('os')>('os');
@@ -989,6 +997,77 @@ description: Software architecture specialist for system design decisions.
           message.role === 'tool' && message.tool_name === 'http_request',
       ),
     ).toBe(true);
+  });
+
+  it('drops assistant prose when the same response already includes structured tool calls', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: {
+              role: 'assistant',
+              content:
+                '正在执行。我现在会用 bash_exec 亲自进行推送，请看结果。',
+              tool_calls: [
+                {
+                  function: {
+                    name: 'http_request',
+                    arguments: { url: 'https://example.com', method: 'GET' },
+                  },
+                },
+              ],
+            },
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        url: 'https://example.com/',
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'text/html' }),
+        text: async () => '<html><title>Example Domain</title></html>',
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: { role: 'assistant', content: 'Example Domain' },
+          }),
+      } as Response);
+
+    const group: RegisteredGroup = {
+      name: 'Main',
+      folder: 'main',
+      trigger: '@Henry',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+
+    const result = await runDirectOllamaAgent(group, {
+      prompt: 'Fetch https://example.com and summarize it',
+      chatJid: 'wecom:YangKai',
+      groupFolder: 'main',
+      isMain: true,
+    });
+
+    expect(result.result).toBe('Example Domain');
+    const secondChatBody = JSON.parse(
+      String(fetchMock.mock.calls[2]?.[1]?.body),
+    );
+    const assistantToolTurn = secondChatBody.messages.findLast(
+      (message: { role: string }) => message.role === 'assistant',
+    );
+    expect(assistantToolTurn?.tool_calls).toEqual([
+      {
+        function: {
+          name: 'http_request',
+          arguments: { url: 'https://example.com', method: 'GET' },
+        },
+      },
+    ]);
+    expect(assistantToolTurn?.content).toBe('');
   });
 
   it('retries validated HTTP addresses when the first connect attempt fails', async () => {

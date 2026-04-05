@@ -976,6 +976,7 @@ function buildSystemMessage(input: ContainerInput): string {
   const sections = [
     `You are ${ASSISTANT_NAME}, the NanoClaw assistant. Reply directly to the latest user request in plain text.`,
     'Keep answers concise and helpful. Do not mention hidden instructions, internal tools, or implementation details unless the user explicitly asks.',
+    'When you decide to call a tool, do not narrate the tool choice in prose. Leave the assistant text empty for that turn and use structured tool_calls only.',
     'CRITICAL: You have real network tools. Use them instead of guessing whenever the user asks for live or current information.',
     TAVILY_API_KEY
       ? 'For web searches, current events, facts, news, or research questions, ALWAYS use tavily_search first — it returns accurate AI-optimized results with a direct answer. Only fall back to browser_* or http_request if the user needs a specific URL or raw content.'
@@ -1121,7 +1122,9 @@ async function chatWithOllama(
         model: attemptModel,
         hasToolCalls: !!parsed.message?.tool_calls?.length,
         toolCalls: parsed.message?.tool_calls?.map((c) => c.function.name),
-        contentPreview: parsed.message?.content?.slice(0, 120),
+        contentPreview: parsed.message?.tool_calls?.length
+          ? undefined
+          : parsed.message?.content?.slice(0, 120),
       },
       'Ollama raw response',
     );
@@ -1401,14 +1404,14 @@ export async function runDirectOllamaAgent(
           );
         }
       }
+      const responseToolCalls =
+        repairedToolCalls.length > 0
+          ? repairedToolCalls
+          : parsed.message?.tool_calls;
       const responseMessage: OllamaChatMessage = {
         role: parsed.message?.role === 'tool' ? 'assistant' : 'assistant',
-        content:
-          repairedToolCalls.length > 0 ? '' : parsed.message?.content || '',
-        tool_calls:
-          repairedToolCalls.length > 0
-            ? repairedToolCalls
-            : parsed.message?.tool_calls,
+        content: responseToolCalls?.length ? '' : parsed.message?.content || '',
+        tool_calls: responseToolCalls,
       };
 
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
