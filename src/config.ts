@@ -134,6 +134,17 @@ export const OLLAMA_CHAT_RETRIES = Math.max(
     10,
   ) || 2,
 );
+// OLLAMA_KEEP_ALIVE: how long Ollama keeps the model loaded in VRAM after a request.
+// Default "30m". Set to "0" to unload immediately, or "-1" to keep forever.
+export const OLLAMA_KEEP_ALIVE: string =
+  process.env.OLLAMA_KEEP_ALIVE || envConfig.OLLAMA_KEEP_ALIVE || '30m';
+// OLLAMA_NUM_PREDICT: max tokens to generate per response. Lower values in tool-calling
+// rounds save time; final response rounds can use a higher budget.
+const rawNumPredict =
+  process.env.OLLAMA_NUM_PREDICT || envConfig.OLLAMA_NUM_PREDICT;
+export const OLLAMA_NUM_PREDICT: number | undefined = rawNumPredict
+  ? Math.max(64, parseInt(rawNumPredict, 10) || 2048)
+  : undefined;
 export const WECOM_BOT_ID = process.env.WECOM_BOT_ID || envConfig.WECOM_BOT_ID;
 export const WECOM_BOT_SECRET =
   process.env.WECOM_BOT_SECRET || envConfig.WECOM_BOT_SECRET;

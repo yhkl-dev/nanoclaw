@@ -2150,14 +2150,11 @@ export function getOllamaToolDefinitions(opts?: {
             function: {
               name: 'bash_exec',
               description:
-                'Run a bash command on the host. Working directory is the NanoClaw project root. Use for editing source files, running npm run build, restarting the service, or any shell task. Output is truncated to 8000 chars.',
+                'Run bash command on host. Output truncated to 8000 chars.',
               parameters: {
                 type: 'object',
                 properties: {
-                  command: {
-                    type: 'string',
-                    description: 'The bash command to run.',
-                  },
+                  command: { type: 'string' },
                 },
                 required: ['command'],
               },
@@ -2167,19 +2164,12 @@ export function getOllamaToolDefinitions(opts?: {
             type: 'function',
             function: {
               name: 'write_file',
-              description:
-                'Write content to a file on the host. Use absolute paths or paths relative to the project root.',
+              description: 'Write content to a file on host.',
               parameters: {
                 type: 'object',
                 properties: {
-                  file_path: {
-                    type: 'string',
-                    description: 'Absolute or project-relative file path.',
-                  },
-                  content: {
-                    type: 'string',
-                    description: 'Full file content to write.',
-                  },
+                  file_path: { type: 'string' },
+                  content: { type: 'string' },
                 },
                 required: ['file_path', 'content'],
               },
@@ -2189,15 +2179,11 @@ export function getOllamaToolDefinitions(opts?: {
             type: 'function',
             function: {
               name: 'read_file',
-              description:
-                'Read a file from the host filesystem. Returns up to 12000 chars.',
+              description: 'Read file from host. Returns up to 12000 chars.',
               parameters: {
                 type: 'object',
                 properties: {
-                  file_path: {
-                    type: 'string',
-                    description: 'Absolute or project-relative file path.',
-                  },
+                  file_path: { type: 'string' },
                 },
                 required: ['file_path'],
               },
@@ -2211,33 +2197,20 @@ export function getOllamaToolDefinitions(opts?: {
       type: 'function',
       function: {
         name: 'http_request',
-        description:
-          'Make a real HTTP request to a URL and return the response status, headers, and text body snippet. Prefer this for APIs, JSON/XML/RSS feeds, status checks, raw headers, or static fetches where a browser is unnecessary.',
+        description: 'HTTP request. Use for APIs, JSON/XML/RSS, status checks.',
         parameters: {
           type: 'object',
           properties: {
-            url: {
-              type: 'string',
-              description: 'The full http or https URL to request.',
-            },
+            url: { type: 'string', description: 'Full URL.' },
             method: {
               type: 'string',
-              description:
-                'HTTP method. One of GET, POST, PUT, PATCH, DELETE, or HEAD. Defaults to GET.',
+              description: 'GET|POST|PUT|PATCH|DELETE|HEAD',
             },
-            headers: {
-              type: 'object',
-              description: 'Optional request headers as string values.',
-            },
-            body: {
-              type: 'string',
-              description:
-                'Optional request body for POST/PUT/PATCH/DELETE requests.',
-            },
+            headers: { type: 'object' },
+            body: { type: 'string' },
             max_chars: {
               type: 'integer',
-              description:
-                'Maximum number of response body characters to return. Defaults to 12000.',
+              description: 'Max response chars. Default 12000.',
             },
           },
           required: ['url'],
@@ -2256,19 +2229,14 @@ export function getOllamaToolDefinitions(opts?: {
       type: 'function',
       function: {
         name: 'memory_write',
-        description:
-          "Append a note to this group's CLAUDE.md memory file. Use this to persist important facts, preferences, or context that should be remembered across future conversations. Notes are appended and never overwrite existing content.",
+        description: 'Persist a note to group memory for future conversations.',
         parameters: {
           type: 'object',
           properties: {
-            note: {
-              type: 'string',
-              description: 'The text to append. Keep it concise and factual.',
-            },
+            note: { type: 'string', description: 'Concise factual text.' },
             section: {
               type: 'string',
-              description:
-                'Optional section header (e.g. "User preferences", "Project context"). Creates a markdown ## heading.',
+              description: 'Optional heading, e.g. "User preferences".',
             },
           },
           required: ['note'],

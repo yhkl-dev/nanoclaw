@@ -37,6 +37,7 @@ import {
   ensureContainerRuntimeRunning,
   PROXY_BIND_HOST,
 } from './container-runtime.js';
+import { warmupOllamaModel } from './ollama-direct.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -578,6 +579,8 @@ function recoverPendingMessages(): void {
 function ensureContainerSystemRunning(): void {
   if (MODEL_BACKEND === 'ollama') {
     logger.info('MODEL_BACKEND=ollama, skipping container runtime startup');
+    // Fire-and-forget: preload the model into VRAM so the first message is fast.
+    warmupOllamaModel().catch(() => {});
     cleanupOrphans();
     return;
   }

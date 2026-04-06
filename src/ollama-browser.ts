@@ -1782,18 +1782,28 @@ async function handleBrowserClose(
   return JSON.stringify({ ok: true, container: containerName }, null, 2);
 }
 
+// Helpers for concise tool definitions — reduce token overhead per request.
+const REF_DESC = 'Element ref, e.g. @e1';
+function refParam(required: boolean): Record<string, unknown> {
+  const schema: Record<string, unknown> = {
+    type: 'object',
+    properties: { target: { type: 'string', description: REF_DESC } },
+  };
+  if (required) schema.required = ['target'];
+  return schema;
+}
+
 export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
   return [
     {
       type: 'function',
       function: {
         name: 'browser_open',
-        description:
-          'Open a real website page in a sandboxed browser session. Prefer this for webpages, articles, homepages, news lists, or any page content that may need DOM reading or JavaScript.',
+        description: 'Open a URL in the headless browser.',
         parameters: {
           type: 'object',
           properties: {
-            url: { type: 'string', description: 'The full http or https URL.' },
+            url: { type: 'string', description: 'Full http(s) URL.' },
           },
           required: ['url'],
         },
@@ -1803,27 +1813,14 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_snapshot',
-        description:
-          'Read the current browser page accessibility tree or interactive elements. Prefer this after browser_open when you need titles, headlines, links, posts, buttons, or other page content.',
+        description: 'Read page accessibility tree. Call after browser_open.',
         parameters: {
           type: 'object',
           properties: {
-            interactive_only: {
-              type: 'boolean',
-              description: 'When true, only return interactive elements.',
-            },
-            compact: {
-              type: 'boolean',
-              description: 'When true, use compact snapshot output.',
-            },
-            depth: {
-              type: 'integer',
-              description: 'Optional maximum snapshot depth.',
-            },
-            scope: {
-              type: 'string',
-              description: 'Optional CSS selector to scope the snapshot.',
-            },
+            interactive_only: { type: 'boolean' },
+            compact: { type: 'boolean' },
+            depth: { type: 'integer' },
+            scope: { type: 'string', description: 'CSS selector scope.' },
           },
         },
       },
@@ -1832,7 +1829,7 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_back',
-        description: 'Navigate back in browser history.',
+        description: 'Go back.',
         parameters: { type: 'object', properties: {} },
       },
     },
@@ -1840,7 +1837,7 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_forward',
-        description: 'Navigate forward in browser history.',
+        description: 'Go forward.',
         parameters: { type: 'object', properties: {} },
       },
     },
@@ -1848,7 +1845,7 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_reload',
-        description: 'Reload the current browser page.',
+        description: 'Reload page.',
         parameters: { type: 'object', properties: {} },
       },
     },
@@ -1856,26 +1853,20 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_click',
-        description: 'Click an element by agent-browser ref such as @e1.',
-        parameters: {
-          type: 'object',
-          properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-          },
-          required: ['target'],
-        },
+        description: 'Click element by ref.',
+        parameters: refParam(true),
       },
     },
     {
       type: 'function',
       function: {
         name: 'browser_fill',
-        description: 'Fill an input element by ref with the provided text.',
+        description: 'Clear and fill input by ref.',
         parameters: {
           type: 'object',
           properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-            text: { type: 'string', description: 'Text to fill.' },
+            target: { type: 'string', description: REF_DESC },
+            text: { type: 'string' },
           },
           required: ['target', 'text'],
         },
@@ -1885,13 +1876,12 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_type',
-        description:
-          'Type text into an element by ref without clearing existing content.',
+        description: 'Type text into element (append, no clear).',
         parameters: {
           type: 'object',
           properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-            text: { type: 'string', description: 'Text to type.' },
+            target: { type: 'string', description: REF_DESC },
+            text: { type: 'string' },
           },
           required: ['target', 'text'],
         },
@@ -1901,15 +1891,10 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_press',
-        description: 'Press a keyboard key in the current browser page.',
+        description: 'Press a key (e.g. Enter, Escape).',
         parameters: {
           type: 'object',
-          properties: {
-            key: {
-              type: 'string',
-              description: 'Key name, for example Enter.',
-            },
-          },
+          properties: { key: { type: 'string' } },
           required: ['key'],
         },
       },
@@ -1918,26 +1903,20 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_hover',
-        description: 'Hover an element by ref.',
-        parameters: {
-          type: 'object',
-          properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-          },
-          required: ['target'],
-        },
+        description: 'Hover element by ref.',
+        parameters: refParam(true),
       },
     },
     {
       type: 'function',
       function: {
         name: 'browser_select',
-        description: 'Select a dropdown option by ref and option value.',
+        description: 'Select dropdown option.',
         parameters: {
           type: 'object',
           properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-            value: { type: 'string', description: 'Option value to select.' },
+            target: { type: 'string', description: REF_DESC },
+            value: { type: 'string' },
           },
           required: ['target', 'value'],
         },
@@ -1947,46 +1926,28 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_check',
-        description: 'Check a checkbox or similar control by ref.',
-        parameters: {
-          type: 'object',
-          properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-          },
-          required: ['target'],
-        },
+        description: 'Check checkbox by ref.',
+        parameters: refParam(true),
       },
     },
     {
       type: 'function',
       function: {
         name: 'browser_uncheck',
-        description: 'Uncheck a checkbox or similar control by ref.',
-        parameters: {
-          type: 'object',
-          properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-          },
-          required: ['target'],
-        },
+        description: 'Uncheck checkbox by ref.',
+        parameters: refParam(true),
       },
     },
     {
       type: 'function',
       function: {
         name: 'browser_scroll',
-        description: 'Scroll the page in a direction by a number of pixels.',
+        description: 'Scroll page.',
         parameters: {
           type: 'object',
           properties: {
-            direction: {
-              type: 'string',
-              description: 'One of up, down, left, or right.',
-            },
-            amount: {
-              type: 'integer',
-              description: 'Optional pixels to scroll. Defaults to 500.',
-            },
+            direction: { type: 'string', description: 'up|down|left|right' },
+            amount: { type: 'integer', description: 'Pixels. Default 500.' },
           },
           required: ['direction'],
         },
@@ -1996,23 +1957,18 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_wait',
-        description:
-          'Wait for the page to update by element ref, text, URL pattern, load state, or milliseconds.',
+        description: 'Wait for element, text, URL, load state, or ms.',
         parameters: {
           type: 'object',
           properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-            text: { type: 'string', description: 'Text to wait for.' },
-            url_pattern: {
-              type: 'string',
-              description: 'URL glob pattern such as **/dashboard.',
-            },
+            target: { type: 'string', description: REF_DESC },
+            text: { type: 'string' },
+            url_pattern: { type: 'string' },
             load: {
               type: 'string',
-              description:
-                'Load state like load, domcontentloaded, or networkidle.',
+              description: 'load|domcontentloaded|networkidle',
             },
-            ms: { type: 'integer', description: 'Milliseconds to wait.' },
+            ms: { type: 'integer' },
           },
         },
       },
@@ -2021,57 +1977,36 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_get_text',
-        description: 'Get text from an element by ref.',
-        parameters: {
-          type: 'object',
-          properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-          },
-          required: ['target'],
-        },
+        description: 'Get text of element.',
+        parameters: refParam(true),
       },
     },
     {
       type: 'function',
       function: {
         name: 'browser_get_html',
-        description: 'Get inner HTML from an element by ref.',
-        parameters: {
-          type: 'object',
-          properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-          },
-          required: ['target'],
-        },
+        description: 'Get innerHTML of element.',
+        parameters: refParam(true),
       },
     },
     {
       type: 'function',
       function: {
         name: 'browser_get_value',
-        description: 'Get the current value from an input element by ref.',
-        parameters: {
-          type: 'object',
-          properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-          },
-          required: ['target'],
-        },
+        description: 'Get input value.',
+        parameters: refParam(true),
       },
     },
     {
       type: 'function',
       function: {
         name: 'browser_get_attr',
-        description: 'Get an attribute value from an element by ref.',
+        description: 'Get attribute of element.',
         parameters: {
           type: 'object',
           properties: {
-            target: { type: 'string', description: 'Element ref like @e1.' },
-            attribute: {
-              type: 'string',
-              description: 'Attribute name such as href or aria-label.',
-            },
+            target: { type: 'string', description: REF_DESC },
+            attribute: { type: 'string', description: 'e.g. href, aria-label' },
           },
           required: ['target', 'attribute'],
         },
@@ -2081,14 +2016,11 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_get_count',
-        description: 'Count elements matching a CSS selector.',
+        description: 'Count elements by CSS selector.',
         parameters: {
           type: 'object',
           properties: {
-            selector: {
-              type: 'string',
-              description: 'CSS selector to count, such as .item.',
-            },
+            selector: { type: 'string', description: 'CSS selector.' },
           },
           required: ['selector'],
         },
@@ -2098,7 +2030,7 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_get_title',
-        description: 'Get the current browser page title.',
+        description: 'Get page title.',
         parameters: { type: 'object', properties: {} },
       },
     },
@@ -2106,7 +2038,7 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_get_url',
-        description: 'Get the current browser page URL.',
+        description: 'Get page URL.',
         parameters: { type: 'object', properties: {} },
       },
     },
@@ -2114,8 +2046,7 @@ export function getBrowserToolDefinitions(): OllamaToolDefinition[] {
       type: 'function',
       function: {
         name: 'browser_close',
-        description:
-          'Close the sandboxed browser session for the current chat session.',
+        description: 'Close browser session.',
         parameters: { type: 'object', properties: {} },
       },
     },

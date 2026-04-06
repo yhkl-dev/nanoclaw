@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
+import { Pool } from 'undici';
 
 import {
   ASSISTANT_NAME,
@@ -16,7 +17,9 @@ import {
   OLLAMA_SESSION_RECENT_MESSAGES,
   OLLAMA_SESSION_SUMMARY_MAX_CHARS,
   OLLAMA_CHAT_RETRIES,
+  OLLAMA_KEEP_ALIVE,
   OLLAMA_NUM_CTX,
+  OLLAMA_NUM_PREDICT,
   OLLAMA_TEMPERATURE,
   OLLAMA_THINK,
   PROJECT_ROOT,
@@ -64,6 +67,21 @@ const MAX_ECC_METADATA_FILE_BYTES = 8_192;
 const ASSISTANT_BROWSER_FALLBACK_MESSAGE =
   "I couldn't complete that browser request. The browser tool did not return usable page content.";
 const INTERNAL_BLOCK_PATTERN = /<internal>[\s\S]*?<\/internal>/gi;
+
+// Lazy-initialized connection pool for the Ollama API host.
+// Used as a fetch() dispatcher to reuse TCP connections, saving ~50-100ms/call.
+let ollamaPool: Pool | undefined;
+function getOllamaDispatcher(): Pool | undefined {
+  if (!ollamaPool && OLLAMA_HOST) {
+    ollamaPool = new Pool(OLLAMA_HOST, {
+      connections: 4,
+      pipelining: 1,
+      keepAliveTimeout: 60_000,
+      keepAliveMaxTimeout: 120_000,
+    });
+  }
+  return ollamaPool;
+}
 const AGENT_BROWSER_TAG_PATTERN = /<agent-browser\b[^>]*\/?>/gi;
 const AGENT_BROWSER_LINE_PATTERN = /^\s*agent-browser .*(?:\n|$)/gim;
 
@@ -1278,7 +1296,7 @@ async function chatWithOllama(
   messages: OllamaChatMessage[],
   timeoutMs: number,
   tools: OllamaToolDefinition[],
-  opts?: { model?: string; prompt?: string },
+  opts?: { model?: string; prompt?: string; toolRound?: boolean },
 ): Promise<OllamaChatResponse> {
   const model =
     opts?.model ??
@@ -1289,6 +1307,12 @@ async function chatWithOllama(
   if (OLLAMA_NUM_CTX) ollamaOptions.num_ctx = OLLAMA_NUM_CTX;
   if (OLLAMA_TEMPERATURE !== undefined)
     ollamaOptions.temperature = OLLAMA_TEMPERATURE;
+  // Tool-calling rounds only need short JSON output; use a lower budget.
+  if (OLLAMA_NUM_PREDICT) {
+    ollamaOptions.num_predict = opts?.toolRound
+      ? Math.min(OLLAMA_NUM_PREDICT, 512)
+      : OLLAMA_NUM_PREDICT;
+  }
 
   async function attemptChat(
     attemptModel: string,
@@ -1302,11 +1326,14 @@ async function chatWithOllama(
         messages,
         tools,
         think: OLLAMA_THINK,
+        keep_alive: OLLAMA_KEEP_ALIVE,
         ...(Object.keys(ollamaOptions).length > 0
           ? { options: ollamaOptions }
           : {}),
       }),
       signal: createFetchTimeout(timeoutMs),
+      // @ts-expect-error -- Node.js 18+ supports dispatcher option for connection pooling
+      dispatcher: getOllamaDispatcher(),
     });
 
     const rawText = await response.text();
@@ -1479,6 +1506,42 @@ function extractLastUserMessage(prompt: string): string | null {
   return matches[matches.length - 1][1].trim() || null;
 }
 
+/**
+ * Send a lightweight request to Ollama to ensure the model is loaded into VRAM.
+ * Call once at startup to avoid cold-start latency on the first real message.
+ */
+export async function warmupOllamaModel(): Promise<void> {
+  if (!OLLAMA_HOST || !OLLAMA_MODEL) return;
+  try {
+    logger.info(
+      { model: OLLAMA_MODEL, host: OLLAMA_HOST },
+      'Warming up Ollama model',
+    );
+    const response = await fetch(`${OLLAMA_HOST}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        prompt: '',
+        keep_alive: OLLAMA_KEEP_ALIVE,
+      }),
+      signal: AbortSignal.timeout(30_000),
+      dispatcher: getOllamaDispatcher(),
+    } as RequestInit);
+    await response.text();
+    if (response.ok) {
+      logger.info({ model: OLLAMA_MODEL }, 'Ollama model warm-up complete');
+    } else {
+      logger.warn(
+        { status: response.status },
+        'Ollama model warm-up returned non-OK status',
+      );
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Ollama model warm-up failed (non-fatal)');
+  }
+}
+
 export async function runDirectOllamaAgent(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -1620,7 +1683,7 @@ export async function runDirectOllamaAgent(
         requestMessages,
         timeoutMs,
         availableTools,
-        { model: resolvedModel, prompt: input.prompt },
+        { model: resolvedModel, prompt: input.prompt, toolRound: round > 0 },
       );
       const textContent = parsed.message?.content || '';
       let repairedToolCalls: OllamaToolCall[] = [];
