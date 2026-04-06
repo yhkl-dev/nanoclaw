@@ -107,6 +107,11 @@ export function selectOllamaModel(
 ): string | undefined {
   if (groupModel) return groupModel;
 
+  // Short-circuit: no routing rules and no fast model means only one model is
+  // configured — skip keyword matching and isSimplePrompt() analysis entirely.
+  // Use getter functions so test overrides via _resetOllamaModelRoutesCache are respected.
+  if (!getRoutesString() && !getFastModel()) return getDefaultModel();
+
   const routes = getOllamaModelRoutes();
   if (routes.length > 0) {
     const lower = prompt.toLowerCase();

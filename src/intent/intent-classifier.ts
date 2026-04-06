@@ -95,6 +95,17 @@ export class LLMIntentClassifier {
       return this.fallbackKeywordMatch(userMessage);
     }
 
+    // When there's no dedicated fast model (or it's the same as the main model),
+    // skip the LLM call entirely — a second inference round on the same model
+    // doubles latency and causes VRAM contention without meaningful accuracy gain.
+    if (!OLLAMA_FAST_MODEL || OLLAMA_FAST_MODEL === OLLAMA_MODEL) {
+      logger.debug(
+        { model },
+        '[intent] single model — skipping LLM classification, using keyword match',
+      );
+      return this.fallbackKeywordMatch(userMessage);
+    }
+
     const t0 = Date.now();
     logger.info({ model, host }, '[intent] calling LLM for classification');
 

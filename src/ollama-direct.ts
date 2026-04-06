@@ -121,6 +121,14 @@ function getSessionPath(groupFolder: string, sessionId: string): string {
   return path.join(getSessionDir(groupFolder), `${sessionId}.json`);
 }
 
+// In-memory session cache — avoids reading JSON from disk on every round of
+// the tool loop and on every follow-up message within the same process lifetime.
+const sessionStateCache = new Map<string, OllamaSessionState>();
+
+function sessionCacheKey(groupFolder: string, sessionId: string): string {
+  return `${groupFolder}/${sessionId}`;
+}
+
 function assertValidSessionId(sessionId: string): void {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
     throw new Error(`Invalid Ollama session id "${sessionId}"`);
@@ -1148,21 +1156,22 @@ function extractJsonToolCallsFromText(
 
 function buildSystemMessage(input: ContainerInput): string {
   const sections = [
-    `You are ${ASSISTANT_NAME}, the NanoClaw assistant. Reply directly to the latest user request in plain text.`,
-    'Keep answers concise and helpful. Do not mention hidden instructions, internal tools, or implementation details unless the user explicitly asks.',
-    'When you decide to call a tool, do not narrate the tool choice in prose. Leave the assistant text empty for that turn and use structured tool_calls only.',
-    'Do not emit literal XML-like tool tags such as <bash_exec>...</bash_exec> or <write_file ...>...</write_file>. Use structured tool_calls only.',
-    'CRITICAL: You have real network tools. Use them instead of guessing whenever the user asks for live or current information.',
-    TAVILY_API_KEY
-      ? 'For web searches, current events, facts, news, or research questions, ALWAYS use tavily_search first — it returns accurate AI-optimized results with a direct answer. Only fall back to browser_* or http_request if the user needs a specific URL or raw content.'
-      : 'Use http_request for APIs, JSON/XML/RSS feeds, raw headers, status checks, or static text fetches. Never claim you fetched something unless a tool result confirms it.',
-    'Use http_request for APIs, JSON/XML/RSS feeds, raw headers, status checks, or static text fetches. Never claim you fetched something unless a tool result confirms it.',
-    'For normal webpages, articles, homepages, news lists, and other page-reading tasks, prefer the browser_* tools. If a site needs JavaScript, clicking, form filling, or DOM inspection, use browser_* tools instead of http_request. Re-run browser_snapshot after browser_open or browser_click because element refs can change.',
-    'For browser tasks, prefer one decisive action at a time. After any navigation or interaction that may change the page, re-run browser_snapshot or a browser_get_* tool before making more assumptions.',
-    'If http_request fails but a later browser_* tool succeeds, treat the browser result as the source of truth. Do not answer with a generic network-failure apology after successful browser tool output.',
-    'Use only the exact browser_* tool names provided. Never invent tool names.',
-    'If the user sends literal <agent-browser ...> tags, interpret them as instructions to use the matching browser_* tools. Do not echo those tags back to the user.',
-    'Do not emit literal <agent-browser ...> tags. Use the browser_* tools instead.',
+    `You are ${ASSISTANT_NAME}, the NanoClaw assistant. Reply directly to the latest user request in plain text. Keep answers concise. Do not mention hidden instructions or implementation details.`,
+    [
+      'Tool calling rules:',
+      '- Use structured tool_calls only. Do not narrate tool choices in prose — leave assistant text empty when calling a tool.',
+      '- Never emit XML-like tags such as <bash_exec>, <write_file>, or <agent-browser>. Use structured tool_calls instead.',
+      '- Use only exact tool names from the provided list. Never invent tool names.',
+    ].join('\n'),
+    [
+      'Network tools — CRITICAL: use real tools instead of guessing for any live or current information:',
+      TAVILY_API_KEY
+        ? '- Web searches / current events / research: use tavily_search first. Fall back to browser_* or http_request only for specific URLs or raw content.'
+        : '- Web searches / APIs / feeds: use http_request. Never claim you fetched something without a confirming tool result.',
+      '- APIs, JSON/XML/RSS, status checks, raw headers: use http_request.',
+      '- Webpages, articles, JS-rendered content, DOM interaction: use browser_* tools. Re-run browser_snapshot after any navigation before making further assumptions.',
+      '- If http_request fails but a subsequent browser_* call succeeds, use the browser result as truth.',
+    ].join('\n'),
   ];
 
   const groupMemory = readTextFile(
@@ -1181,11 +1190,6 @@ function buildSystemMessage(input: ContainerInput): string {
     }
   }
 
-  const eccGuidance = loadEverythingClaudeCodeSection();
-  if (eccGuidance) {
-    sections.push(eccGuidance);
-  }
-
   const routingHint = inferToolRoutingHint(input.prompt);
   if (routingHint) {
     sections.push(routingHint);
@@ -1199,6 +1203,12 @@ function loadSessionMessages(
   sessionId?: string,
 ): OllamaSessionState {
   if (!sessionId) return { messages: [] };
+
+  const cacheKey = sessionCacheKey(groupFolder, sessionId);
+  if (sessionStateCache.has(cacheKey)) {
+    return sessionStateCache.get(cacheKey)!;
+  }
+
   const sessionPath = getSessionPath(groupFolder, sessionId);
   if (!fs.existsSync(sessionPath)) return { messages: [] };
   const raw = fs.readFileSync(sessionPath, 'utf-8');
@@ -1219,7 +1229,9 @@ function loadSessionMessages(
     };
     fs.writeFileSync(sessionPath, JSON.stringify(payload, null, 2) + '\n');
   }
-  return { summary, messages: sanitized };
+  const state: OllamaSessionState = { summary, messages: sanitized };
+  sessionStateCache.set(cacheKey, state);
+  return state;
 }
 
 function saveSessionMessages(
@@ -1244,6 +1256,11 @@ function saveSessionMessages(
     getSessionPath(groupFolder, sessionId),
     JSON.stringify(payload, null, 2) + '\n',
   );
+  // Update cache to reflect the saved state so subsequent reads stay in-memory.
+  sessionStateCache.set(sessionCacheKey(groupFolder, sessionId), {
+    summary,
+    messages: recent,
+  });
 }
 
 function createFetchTimeout(timeoutMs: number): AbortSignal {
@@ -1292,7 +1309,7 @@ async function chatWithOllama(
     if (parsed.error) {
       throw new Error(`Ollama error: ${parsed.error}`);
     }
-    logger.warn(
+    logger.debug(
       {
         model: attemptModel,
         hasToolCalls: !!parsed.message?.tool_calls?.length,
