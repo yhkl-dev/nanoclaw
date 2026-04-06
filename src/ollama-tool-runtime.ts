@@ -22,6 +22,7 @@ import {
   recordToolFailure,
   resetToolFailure,
 } from './ollama-failure-tracker.js';
+import { recordPendingEdit } from './ollama-edit-reviewer.js';
 import {
   executeBrowserToolCall,
   getBrowserToolDefinitions,
@@ -1327,6 +1328,37 @@ async function executeToolCall(
       toolCall.function.arguments as Record<string, unknown>,
     );
   }
+  if (
+    toolCall.function.name === 'propose_edit' &&
+    OLLAMA_ADMIN_TOOLS &&
+    context.isMain
+  ) {
+    const { file_path, description, content } = toolCall.function.arguments as {
+      file_path: string;
+      description: string;
+      content: string;
+    };
+    if (!file_path || !content) {
+      return JSON.stringify({ error: 'file_path and content are required' });
+    }
+    const { id, diff, isNewFile } = recordPendingEdit(
+      context.groupFolder,
+      file_path,
+      description ?? '',
+      content,
+    );
+    const header = isNewFile
+      ? `New file: ${file_path}\n`
+      : `Proposed changes to ${file_path}:\n\`\`\`diff\n${diff.slice(0, 4000)}\n\`\`\`\n`;
+    return JSON.stringify({
+      ok: true,
+      id,
+      message:
+        header +
+        'Edit is pending user approval. Do NOT claim the file has been written. ' +
+        'Summarize the change and tell the user to confirm.',
+    });
+  }
   if (toolCall.function.name === 'memory_write') {
     const { note, section } = toolCall.function.arguments as {
       note: string;
@@ -2293,6 +2325,34 @@ export function getOllamaToolDefinitions(opts?: {
                   file_path: { type: 'string' },
                 },
                 required: ['file_path'],
+              },
+            },
+          },
+          {
+            type: 'function',
+            function: {
+              name: 'propose_edit',
+              description:
+                'Propose a code change for user review. Use this INSTEAD of write_file for source code files (*.ts, *.js, *.json, etc.). Generates a reviewable diff — the user must confirm before the file is written.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  file_path: {
+                    type: 'string',
+                    description:
+                      'Path to the file (absolute or relative to project root)',
+                  },
+                  description: {
+                    type: 'string',
+                    description:
+                      'Brief summary of what the change does and why',
+                  },
+                  content: {
+                    type: 'string',
+                    description: 'Complete new file content after the change',
+                  },
+                },
+                required: ['file_path', 'description', 'content'],
               },
             },
           },

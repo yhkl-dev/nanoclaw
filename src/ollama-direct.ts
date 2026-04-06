@@ -42,6 +42,12 @@ import {
   triggerSessionReflection,
 } from './ollama-reflection.js';
 import {
+  applyPendingEdits,
+  clearPendingEdits,
+  formatPendingEditsSummary,
+  loadPendingEdits,
+} from './ollama-edit-reviewer.js';
+import {
   assertValidGroupFolder,
   resolveGroupFolderPath,
 } from './group-folder.js';
@@ -1191,6 +1197,7 @@ function buildSystemMessage(input: ContainerInput): string {
       '- When the user says "记住", "记下", "remember", persist it with memory_write — do not just acknowledge verbally.',
       '- When a user corrects you ("不对", "你错了", "错了", "搞错了", "重来", "不是这样", "wrong", "incorrect", "that\'s not right"), ALWAYS: (1) acknowledge the correction, (2) immediately call memory_write with section "Lesson Learned" recording what went wrong and the correct approach.',
       "- After completing a complex task, if you discovered useful details about the user's environment (file paths, installed tools, project structure, preferences), proactively call memory_write to persist them for future sessions.",
+      '- When modifying source code files (*.ts, *.js, *.json, *.yaml, etc.), ALWAYS use propose_edit instead of write_file. propose_edit creates a reviewable diff that the user must approve before the file is written.',
     ].join('\n'),
     [
       'Network tools — CRITICAL: use real tools instead of guessing for any live or current information:',
@@ -1641,10 +1648,78 @@ export async function runDirectOllamaAgent(
       'Sending direct Ollama request',
     );
 
+    // Check for pending edit approvals/rejections before normal Ollama call.
+    const rawLastMessage = extractLastUserMessage(input.prompt);
+    if (!input.isScheduledTask && rawLastMessage) {
+      const pendingEdits = loadPendingEdits(group.folder);
+      if (pendingEdits.length > 0) {
+        const msg = rawLastMessage.toLowerCase().trim();
+        const isApprove = [
+          '确认修改',
+          '同意修改',
+          '应用修改',
+          '确认',
+          'apply',
+          'approve',
+          'confirm',
+        ].some((k) => msg.includes(k));
+        const isReject = [
+          '取消修改',
+          '拒绝修改',
+          '不要修改',
+          '取消',
+          'cancel',
+          'reject',
+          'discard',
+        ].some((k) => msg.includes(k));
+
+        if (isApprove) {
+          logger.info(
+            { group: group.name },
+            '[edit-reviewer] user approved pending edits',
+          );
+          const applyResult = await applyPendingEdits(group.folder);
+          let resultText: string;
+          if (applyResult.buildSuccess) {
+            resultText =
+              `✅ 修改已应用并通过类型检查：\n${applyResult.applied.map((f) => `• ${f}`).join('\n')}` +
+              (applyResult.buildOutput
+                ? `\n\n编译输出：\n${applyResult.buildOutput}`
+                : '');
+          } else {
+            resultText = `❌ 类型检查失败，已自动还原所有修改：\n${applyResult.applied.map((f) => `• ${f}`).join('\n')}\n\n错误：\n${applyResult.buildOutput}`;
+          }
+          const out: ContainerOutput = {
+            status: 'success',
+            result: resultText,
+            newSessionId: sessionId,
+          };
+          if (onOutput) await onOutput(out);
+          completed = true;
+          return out;
+        }
+
+        if (isReject) {
+          logger.info(
+            { group: group.name },
+            '[edit-reviewer] user rejected pending edits',
+          );
+          clearPendingEdits(group.folder);
+          const out: ContainerOutput = {
+            status: 'success',
+            result: '已取消，所有待修改内容已丢弃。',
+            newSessionId: sessionId,
+          };
+          if (onOutput) await onOutput(out);
+          completed = true;
+          return out;
+        }
+      }
+    }
+
     // Classify intent for tool pre-filtering (non-blocking, best-effort).
     // Extract only the last raw user message from the XML prompt — not the full
     // formatted context with history — to keep classification fast and accurate.
-    const rawLastMessage = extractLastUserMessage(input.prompt);
     const intentResult =
       input.isScheduledTask || !rawLastMessage
         ? null
@@ -1881,9 +1956,16 @@ export async function runDirectOllamaAgent(
       ).catch(() => {});
     }
 
+    // If pending edits exist, append a review prompt so the user knows to confirm.
+    const pendingAfter = loadPendingEdits(group.folder);
+    const reviewPrompt =
+      !input.isScheduledTask && pendingAfter.length > 0
+        ? formatPendingEditsSummary(pendingAfter)
+        : '';
+
     const output: ContainerOutput = {
       status: 'success',
-      result: assistantText,
+      result: assistantText + reviewPrompt,
       newSessionId: sessionId,
     };
 
