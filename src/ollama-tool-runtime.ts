@@ -2094,8 +2094,20 @@ const INTENT_ALLOWED_GROUPS: Record<string, string[] | null> = {
     'list_dir',
     'search_files',
   ],
-  // unknown / undefined = no filtering
-  unknown: null,
+  // unknown: reduced general-purpose set instead of all 37 tools
+  unknown: [
+    'http_request',
+    'tavily_',
+    'browser_open',
+    'browser_snapshot',
+    'browser_click',
+    'browser_type',
+    'browser_close',
+    'system_stats',
+    'bash_exec',
+    'read_file',
+    'write_file',
+  ],
 };
 
 function filterToolsByIntent(
@@ -2268,55 +2280,82 @@ export function getOllamaToolDefinitions(opts?: {
   return filterToolsByIntent(allTools, opts?.intent);
 }
 
+async function executeSingleToolCall(
+  toolCall: OllamaToolCall,
+  context: OllamaToolContext,
+): Promise<OllamaExecutedToolCall> {
+  const startedAt = Date.now();
+  try {
+    const result = await executeToolCall(toolCall, context);
+    const durationMs = Date.now() - startedAt;
+    return {
+      toolCall,
+      result: buildToolResultEnvelope({
+        toolName: toolCall.function.name,
+        rawResult: result,
+        success: true,
+        durationMs,
+      }),
+      success: true,
+      durationMs,
+    };
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    return {
+      toolCall,
+      result: buildToolResultEnvelope({
+        toolName: toolCall.function.name,
+        success: false,
+        durationMs,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        ...(error instanceof HttpToolError
+          ? {
+              errorCode: error.code,
+              errorCategory: error.category,
+              errorDetails: error.details,
+            }
+          : {}),
+      }),
+      success: false,
+      durationMs,
+    };
+  }
+}
+
 export async function executeOllamaToolCalls(
   toolCalls: OllamaToolCall[],
   context: OllamaToolContext,
 ): Promise<OllamaExecutedToolCall[]> {
-  const results: OllamaExecutedToolCall[] = [];
+  const browserCalls = toolCalls.filter((tc) =>
+    tc.function.name.startsWith('browser_'),
+  );
+  const otherCalls = toolCalls.filter(
+    (tc) => !tc.function.name.startsWith('browser_'),
+  );
+
+  // Non-browser tools are independent — run in parallel.
+  const otherResults =
+    otherCalls.length > 0
+      ? await Promise.all(
+          otherCalls.map((tc) => executeSingleToolCall(tc, context)),
+        )
+      : [];
+
+  // Browser tools share state — run sequentially with failure short-circuit.
+  const browserResults: OllamaExecutedToolCall[] = [];
   let browserToolFailed = false;
-  for (const toolCall of toolCalls) {
-    if (browserToolFailed && toolCall.function.name.startsWith('browser_')) {
-      continue;
-    }
-    const startedAt = Date.now();
-    try {
-      const result = await executeToolCall(toolCall, context);
-      const durationMs = Date.now() - startedAt;
-      results.push({
-        toolCall,
-        result: buildToolResultEnvelope({
-          toolName: toolCall.function.name,
-          rawResult: result,
-          success: true,
-          durationMs,
-        }),
-        success: true,
-        durationMs,
-      });
-    } catch (error) {
-      const durationMs = Date.now() - startedAt;
-      results.push({
-        toolCall,
-        result: buildToolResultEnvelope({
-          toolName: toolCall.function.name,
-          success: false,
-          durationMs,
-          errorMessage: error instanceof Error ? error.message : String(error),
-          ...(error instanceof HttpToolError
-            ? {
-                errorCode: error.code,
-                errorCategory: error.category,
-                errorDetails: error.details,
-              }
-            : {}),
-        }),
-        success: false,
-        durationMs,
-      });
-      if (toolCall.function.name.startsWith('browser_')) {
-        browserToolFailed = true;
-      }
-    }
+  for (const tc of browserCalls) {
+    if (browserToolFailed) break;
+    const result = await executeSingleToolCall(tc, context);
+    browserResults.push(result);
+    if (!result.success) browserToolFailed = true;
   }
-  return results;
+
+  // Merge results preserving original tool call order.
+  const resultMap = new Map<OllamaToolCall, OllamaExecutedToolCall>();
+  for (const r of otherResults) resultMap.set(r.toolCall, r);
+  for (const r of browserResults) resultMap.set(r.toolCall, r);
+  return toolCalls
+    .map((tc) => resultMap.get(tc))
+    .filter((r): r is OllamaExecutedToolCall => r !== undefined);
 }

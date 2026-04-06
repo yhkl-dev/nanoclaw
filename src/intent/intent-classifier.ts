@@ -223,10 +223,38 @@ User: "系统内存使用率" -> {"intent":"system_stats","confidence":0.95}`;
         'calendar_list',
         ['查日历', '日程安排', '看日历', 'list calendar', 'check calendar'],
       ],
-      ['tavily_search', ['搜索', '查询', '查一下', '了解', 'search', 'find']],
+      [
+        'tavily_search',
+        [
+          '搜索',
+          '查询',
+          '查一下',
+          '了解',
+          '新闻',
+          '最新',
+          '今天',
+          '天气',
+          '股价',
+          'search',
+          'find',
+          'news',
+          'latest',
+          'weather',
+          'stock price',
+        ],
+      ],
       [
         'browse_web',
-        ['打开网页', '访问', '浏览', '网址', 'open url', 'browse'],
+        [
+          '打开网页',
+          '访问',
+          '浏览',
+          '网址',
+          'open url',
+          'browse',
+          'http://',
+          'https://',
+        ],
       ],
       [
         'system_stats',
@@ -252,18 +280,20 @@ User: "系统内存使用率" -> {"intent":"system_stats","confidence":0.95}`;
     for (const [intent, keywords] of rules) {
       if (keywords.some((k) => m.includes(k))) {
         logger.info(
-          { intent, confidence: 0.65, source: 'keyword' },
+          { intent, confidence: 0.75, source: 'keyword' },
           '[intent] result (keyword fallback)',
         );
-        return { intent, confidence: 0.65, rawPrompt: message };
+        return { intent, confidence: 0.75, rawPrompt: message };
       }
     }
 
+    // Default to chat — confidence 0.6 is above the classifyIntent threshold
+    // (0.55) so intent filtering will still activate for simple chat.
     logger.info(
-      { intent: 'chat', confidence: 0.5, source: 'default' },
+      { intent: 'chat', confidence: 0.6, source: 'default' },
       '[intent] result (default chat)',
     );
-    return { intent: 'chat', confidence: 0.5, rawPrompt: message };
+    return { intent: 'chat', confidence: 0.6, rawPrompt: message };
   }
 
   private cacheKey(message: string): string {
@@ -348,10 +378,10 @@ export async function classifyIntent(
       logger.warn('[intent] classification timed out, using all tools');
       return null;
     }
-    if (result.confidence < 0.6) {
+    if (result.confidence < 0.55) {
       logger.info(
         { intent: result.intent, confidence: result.confidence },
-        '[intent] confidence too low (<0.6), using all tools',
+        '[intent] confidence too low (<0.55), using all tools',
       );
       return null;
     }

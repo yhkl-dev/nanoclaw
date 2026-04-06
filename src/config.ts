@@ -115,6 +115,25 @@ export const OLLAMA_SESSION_SUMMARY_MAX_CHARS = Math.max(
 // Defaults to false because thinking mode makes tool calling unreliable.
 export const OLLAMA_THINK =
   (process.env.OLLAMA_THINK || envConfig.OLLAMA_THINK) === 'true';
+// OLLAMA_NUM_CTX: context window size sent to Ollama. Lower values reduce VRAM
+// and speed up prefill. Default 8192 is sufficient for 12 recent messages + system prompt.
+const rawNumCtx = process.env.OLLAMA_NUM_CTX || envConfig.OLLAMA_NUM_CTX;
+export const OLLAMA_NUM_CTX: number | undefined = rawNumCtx
+  ? Math.max(512, parseInt(rawNumCtx, 10) || 8192)
+  : undefined;
+// OLLAMA_TEMPERATURE: sampling temperature. Lower = more deterministic.
+const rawTemp = process.env.OLLAMA_TEMPERATURE || envConfig.OLLAMA_TEMPERATURE;
+export const OLLAMA_TEMPERATURE: number | undefined = rawTemp
+  ? Math.max(0, Math.min(2, parseFloat(rawTemp) || 0.7))
+  : undefined;
+// OLLAMA_CHAT_RETRIES: retry count for transient Ollama chat errors (timeout, connection).
+export const OLLAMA_CHAT_RETRIES = Math.max(
+  0,
+  parseInt(
+    process.env.OLLAMA_CHAT_RETRIES || envConfig.OLLAMA_CHAT_RETRIES || '2',
+    10,
+  ) || 2,
+);
 export const WECOM_BOT_ID = process.env.WECOM_BOT_ID || envConfig.WECOM_BOT_ID;
 export const WECOM_BOT_SECRET =
   process.env.WECOM_BOT_SECRET || envConfig.WECOM_BOT_SECRET;

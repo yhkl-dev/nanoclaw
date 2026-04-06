@@ -15,6 +15,9 @@ import {
   OLLAMA_MODEL,
   OLLAMA_SESSION_RECENT_MESSAGES,
   OLLAMA_SESSION_SUMMARY_MAX_CHARS,
+  OLLAMA_CHAT_RETRIES,
+  OLLAMA_NUM_CTX,
+  OLLAMA_TEMPERATURE,
   OLLAMA_THINK,
   PROJECT_ROOT,
   TAVILY_API_KEY,
@@ -1162,11 +1165,13 @@ function buildSystemMessage(input: ContainerInput): string {
       '- Use structured tool_calls only. Do not narrate tool choices in prose — leave assistant text empty when calling a tool.',
       '- Never emit XML-like tags such as <bash_exec>, <write_file>, or <agent-browser>. Use structured tool_calls instead.',
       '- Use only exact tool names from the provided list. Never invent tool names.',
+      '- NEVER claim you performed an action (wrote a file, ran a command, searched the web, etc.) without a real tool call and its confirming result. If you lack the tool, say so honestly.',
+      '- When the user says "记住", "记下", "remember", persist it with memory_write — do not just acknowledge verbally.',
     ].join('\n'),
     [
       'Network tools — CRITICAL: use real tools instead of guessing for any live or current information:',
       TAVILY_API_KEY
-        ? '- Web searches / current events / research: use tavily_search first. Fall back to browser_* or http_request only for specific URLs or raw content.'
+        ? '- Web searches / current events / news / real-time info: ALWAYS use tavily_search. Never answer from training data when the user asks about current events. Fall back to browser_* or http_request only for specific URLs or raw content.'
         : '- Web searches / APIs / feeds: use http_request. Never claim you fetched something without a confirming tool result.',
       '- APIs, JSON/XML/RSS, status checks, raw headers: use http_request.',
       '- Webpages, articles, JS-rendered content, DOM interaction: use browser_* tools. Re-run browser_snapshot after any navigation before making further assumptions.',
@@ -1272,12 +1277,18 @@ function createFetchTimeout(timeoutMs: number): AbortSignal {
 async function chatWithOllama(
   messages: OllamaChatMessage[],
   timeoutMs: number,
-  opts?: { isMain?: boolean; model?: string; prompt?: string; intent?: string },
+  tools: OllamaToolDefinition[],
+  opts?: { model?: string; prompt?: string },
 ): Promise<OllamaChatResponse> {
   const model =
     opts?.model ??
     selectOllamaModel(opts?.prompt ?? '', undefined) ??
     OLLAMA_MODEL;
+
+  const ollamaOptions: Record<string, unknown> = {};
+  if (OLLAMA_NUM_CTX) ollamaOptions.num_ctx = OLLAMA_NUM_CTX;
+  if (OLLAMA_TEMPERATURE !== undefined)
+    ollamaOptions.temperature = OLLAMA_TEMPERATURE;
 
   async function attemptChat(
     attemptModel: string,
@@ -1289,11 +1300,11 @@ async function chatWithOllama(
         model: attemptModel,
         stream: false,
         messages,
-        tools: getOllamaToolDefinitions({
-          isMain: opts?.isMain,
-          intent: opts?.intent,
-        }),
+        tools,
         think: OLLAMA_THINK,
+        ...(Object.keys(ollamaOptions).length > 0
+          ? { options: ollamaOptions }
+          : {}),
       }),
       signal: createFetchTimeout(timeoutMs),
     });
@@ -1323,22 +1334,45 @@ async function chatWithOllama(
     return parsed;
   }
 
-  try {
-    return await attemptChat(model);
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    const isModelNotFound =
-      /model.*not found|try pulling it first|unknown model/i.test(errMsg) ||
-      errMsg.includes('404');
-    if (isModelNotFound && OLLAMA_MODEL && model !== OLLAMA_MODEL) {
-      logger.warn(
-        { requestedModel: model, fallbackModel: OLLAMA_MODEL, error: errMsg },
-        'Requested Ollama model not found — falling back to default model',
-      );
-      return await attemptChat(OLLAMA_MODEL);
+  async function attemptWithRetry(
+    retriesLeft: number,
+    backoffMs: number,
+  ): Promise<OllamaChatResponse> {
+    try {
+      return await attemptChat(model);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+
+      // Model-not-found fallback (no retry needed)
+      const isModelNotFound =
+        /model.*not found|try pulling it first|unknown model/i.test(errMsg) ||
+        errMsg.includes('404');
+      if (isModelNotFound && OLLAMA_MODEL && model !== OLLAMA_MODEL) {
+        logger.warn(
+          { requestedModel: model, fallbackModel: OLLAMA_MODEL, error: errMsg },
+          'Requested Ollama model not found — falling back to default model',
+        );
+        return await attemptChat(OLLAMA_MODEL);
+      }
+
+      // Transient error retry
+      const isTransient =
+        /ECONNREFUSED|ECONNRESET|ETIMEDOUT|AbortError|timeout/i.test(errMsg) ||
+        /\b(502|503|504)\b/.test(errMsg);
+      if (isTransient && retriesLeft > 0) {
+        logger.warn(
+          { error: errMsg, retriesLeft, backoffMs },
+          'Ollama chat transient error — retrying',
+        );
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        return attemptWithRetry(retriesLeft - 1, backoffMs * 2);
+      }
+
+      throw err;
     }
-    throw err;
   }
+
+  return attemptWithRetry(OLLAMA_CHAT_RETRIES, 2_000);
 }
 
 function getScriptEnvironment(groupFolder: string): NodeJS.ProcessEnv {
@@ -1582,12 +1616,12 @@ export async function runDirectOllamaAgent(
       availableTools.map((tool) => [tool.function.name, tool] as const),
     );
     toolLoop: for (let round = 0; round < OLLAMA_TOOL_MAX_ROUNDS; round++) {
-      const parsed = await chatWithOllama(requestMessages, timeoutMs, {
-        isMain: input.isMain,
-        model: resolvedModel,
-        prompt: input.prompt,
-        intent: classifiedIntent,
-      });
+      const parsed = await chatWithOllama(
+        requestMessages,
+        timeoutMs,
+        availableTools,
+        { model: resolvedModel, prompt: input.prompt },
+      );
       const textContent = parsed.message?.content || '';
       let repairedToolCalls: OllamaToolCall[] = [];
       if (!parsed.message?.tool_calls?.length) {
