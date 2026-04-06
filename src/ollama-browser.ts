@@ -1784,8 +1784,10 @@ async function handleBrowserClose(
 
 // Helpers for concise tool definitions — reduce token overhead per request.
 const REF_DESC = 'Element ref, e.g. @e1';
-function refParam(required: boolean): Record<string, unknown> {
-  const schema: Record<string, unknown> = {
+function refParam(
+  required: boolean,
+): OllamaToolDefinition['function']['parameters'] {
+  const schema: OllamaToolDefinition['function']['parameters'] = {
     type: 'object',
     properties: { target: { type: 'string', description: REF_DESC } },
   };
