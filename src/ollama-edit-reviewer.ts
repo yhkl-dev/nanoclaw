@@ -180,7 +180,10 @@ export async function applyPendingEdits(
       logger.info({ file: relPath }, '[edit-reviewer] applied edit');
     } catch (err) {
       skipped.push(relPath);
-      logger.warn({ file: relPath, err }, '[edit-reviewer] failed to write file');
+      logger.warn(
+        { file: relPath, err },
+        '[edit-reviewer] failed to write file',
+      );
     }
   }
 
@@ -230,12 +233,12 @@ export async function applyPendingEdits(
 /**
  * Format pending edits as a human-readable summary for the user.
  */
-export function formatPendingEditsSummary(
-  proposals: EditProposal[],
-): string {
+export function formatPendingEditsSummary(proposals: EditProposal[]): string {
   if (proposals.length === 0) return '';
   const files = proposals
-    .map((p) => `• ${path.relative(PROJECT_ROOT, p.filePath)}: ${p.description}`)
+    .map(
+      (p) => `• ${path.relative(PROJECT_ROOT, p.filePath)}: ${p.description}`,
+    )
     .join('\n');
   return (
     `\n---\n📝 待审核修改 (${proposals.length} 个文件):\n${files}\n\n` +

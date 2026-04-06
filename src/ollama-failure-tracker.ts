@@ -107,10 +107,7 @@ export function recordToolFailure(
 /**
  * Reset failure count on success so the model isn't warned about stale issues.
  */
-export function resetToolFailure(
-  groupFolder: string,
-  toolName: string,
-): void {
+export function resetToolFailure(groupFolder: string, toolName: string): void {
   try {
     const store = loadFailures(groupFolder);
     if (toolName in store) {
