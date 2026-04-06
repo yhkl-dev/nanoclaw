@@ -38,6 +38,10 @@ import {
 } from './ollama-tool-runtime.js';
 import { classifyIntent } from './intent/intent-classifier.js';
 import {
+  detectCorrectionSignals,
+  triggerSessionReflection,
+} from './ollama-reflection.js';
+import {
   assertValidGroupFolder,
   resolveGroupFolderPath,
 } from './group-folder.js';
@@ -1185,6 +1189,8 @@ function buildSystemMessage(input: ContainerInput): string {
       '- Use only exact tool names from the provided list. Never invent tool names.',
       '- NEVER claim you performed an action (wrote a file, ran a command, searched the web, etc.) without a real tool call and its confirming result. If you lack the tool, say so honestly.',
       '- When the user says "记住", "记下", "remember", persist it with memory_write — do not just acknowledge verbally.',
+      '- When a user corrects you ("不对", "你错了", "错了", "搞错了", "重来", "不是这样", "wrong", "incorrect", "that\'s not right"), ALWAYS: (1) acknowledge the correction, (2) immediately call memory_write with section "Lesson Learned" recording what went wrong and the correct approach.',
+      "- After completing a complex task, if you discovered useful details about the user's environment (file paths, installed tools, project structure, preferences), proactively call memory_write to persist them for future sessions.",
     ].join('\n'),
     [
       'Network tools — CRITICAL: use real tools instead of guessing for any live or current information:',
@@ -1610,6 +1616,11 @@ export async function runDirectOllamaAgent(
       content: prompt,
     };
 
+    // Detect if the user is correcting the assistant in this message.
+    // Used after the session to decide whether to run reflection.
+    const hadCorrectionSignal =
+      !input.isScheduledTask && detectCorrectionSignals([userMessage]);
+
     const requestMessages: OllamaChatMessage[] = [
       { role: 'system', content: systemMessage },
       ...(sessionState.summary
@@ -1846,12 +1857,28 @@ export async function runDirectOllamaAgent(
         : assistantText;
     const shouldPersist =
       abortedForLoopGuard || !hadToolFailure || hadToolSuccess;
+    const finalMessages = [
+      ...history,
+      userMessage,
+      { role: 'assistant', content: persistedAssistantText },
+    ];
     if (shouldPersist) {
-      saveSessionMessages(group.folder, sessionId, sessionState.summary, [
-        ...history,
-        userMessage,
-        { role: 'assistant', content: persistedAssistantText },
-      ]);
+      saveSessionMessages(
+        group.folder,
+        sessionId,
+        sessionState.summary,
+        finalMessages,
+      );
+    }
+
+    // Fire-and-forget: reflect on the session to extract learnings for CLAUDE.md.
+    // Never awaited — must not block the user response.
+    if (!input.isScheduledTask) {
+      triggerSessionReflection(
+        group.folder,
+        finalMessages,
+        hadCorrectionSignal,
+      ).catch(() => {});
     }
 
     const output: ContainerOutput = {

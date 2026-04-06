@@ -19,6 +19,10 @@ import {
   BARK_URL,
 } from './config.js';
 import {
+  recordToolFailure,
+  resetToolFailure,
+} from './ollama-failure-tracker.js';
+import {
   executeBrowserToolCall,
   getBrowserToolDefinitions,
 } from './ollama-browser.js';
@@ -2356,13 +2360,16 @@ async function executeSingleToolCall(
   context: OllamaToolContext,
 ): Promise<OllamaExecutedToolCall> {
   const startedAt = Date.now();
+  const toolName = toolCall.function.name;
   try {
     const result = await executeToolCall(toolCall, context);
     const durationMs = Date.now() - startedAt;
+    // Reset failure counter on success to avoid stale warnings.
+    resetToolFailure(context.groupFolder, toolName);
     return {
       toolCall,
       result: buildToolResultEnvelope({
-        toolName: toolCall.function.name,
+        toolName,
         rawResult: result,
         success: true,
         durationMs,
@@ -2372,13 +2379,16 @@ async function executeSingleToolCall(
     };
   } catch (error) {
     const durationMs = Date.now() - startedAt;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    // Track failure for self-learning — writes CLAUDE.md note at threshold.
+    recordToolFailure(context.groupFolder, toolName, errorMessage);
     return {
       toolCall,
       result: buildToolResultEnvelope({
-        toolName: toolCall.function.name,
+        toolName,
         success: false,
         durationMs,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage,
         ...(error instanceof HttpToolError
           ? {
               errorCode: error.code,
