@@ -1671,6 +1671,7 @@ export async function runDirectOllamaAgent(
     const availableTools = getOllamaToolDefinitions({
       isMain: input.isMain,
       intent: classifiedIntent,
+      rawPrompt: rawLastMessage ?? undefined,
     });
     const knownToolNames = new Set(
       availableTools.map((tool) => tool.function.name),

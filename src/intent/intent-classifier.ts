@@ -208,6 +208,35 @@ User: "系统内存使用率" -> {"intent":"system_stats","confidence":0.95}`;
   private fallbackKeywordMatch(message: string): IntentResult {
     const m = message.toLowerCase();
 
+    // Explicit chat keywords — greetings, ack, small-talk patterns.
+    // Matched first so they don't bleed into tool intents.
+    const chatKeywords = [
+      '你好',
+      '谢谢',
+      '感谢',
+      '好的',
+      '明白',
+      '知道了',
+      '没问题',
+      '辛苦了',
+      '再见',
+      'hello',
+      'hi',
+      'thanks',
+      'thank you',
+      'ok',
+      'okay',
+      'got it',
+      'bye',
+    ];
+    if (chatKeywords.some((k) => m.includes(k))) {
+      logger.info(
+        { intent: 'chat', confidence: 0.75, source: 'keyword-chat' },
+        '[intent] result (chat keyword)',
+      );
+      return { intent: 'chat', confidence: 0.75, rawPrompt: message };
+    }
+
     const rules: [Intent, string[]][] = [
       ['gmail_send', ['发邮件', '发送邮件', '写邮件', 'send email']],
       [
@@ -229,10 +258,10 @@ User: "系统内存使用率" -> {"intent":"system_stats","confidence":0.95}`;
           '搜索',
           '查询',
           '查一下',
-          '了解',
+          '了解一下',
           '新闻',
           '最新',
-          '今天',
+          '今天天气',
           '天气',
           '股价',
           'search',
@@ -247,8 +276,8 @@ User: "系统内存使用率" -> {"intent":"system_stats","confidence":0.95}`;
         'browse_web',
         [
           '打开网页',
-          '访问',
-          '浏览',
+          '访问网站',
+          '浏览网页',
           '网址',
           'open url',
           'browse',
@@ -268,12 +297,12 @@ User: "系统内存使用率" -> {"intent":"system_stats","confidence":0.95}`;
           'memory usage',
         ],
       ],
-      ['run_bash', ['执行命令', '运行', '跑一下', 'run command', 'execute']],
+      ['run_bash', ['执行命令', '跑一下', 'run command', 'execute']],
       ['read_file', ['读取文件', '查看文件', '打开文件', 'read file']],
-      ['write_file', ['写文件', '写入', '更新文件', 'write file']],
+      ['write_file', ['写文件', '写入文件', '更新文件', 'write file']],
       [
         'schedule_task',
-        ['定时', '每天', '每小时', '提醒我', 'schedule', 'remind'],
+        ['定时', '每天', '每小时', '每周', '提醒我', 'schedule', 'remind me'],
       ],
     ];
 

@@ -2028,12 +2028,75 @@ function getCalendarToolDefinitions(): OllamaToolDefinition[] {
 }
 
 /**
+ * Keyword → intent groups for secondary intent detection during multi-intent messages.
+ * Mirrors the classifier rules but is used only for tool-set expansion.
+ */
+const SECONDARY_INTENT_KEYWORDS: [string, string[]][] = [
+  [
+    'gmail_',
+    [
+      '发邮件',
+      '发送邮件',
+      '写邮件',
+      '查邮件',
+      '看邮件',
+      '搜邮件',
+      '邮件',
+      'email',
+    ],
+  ],
+  [
+    'calendar_',
+    ['创建日程', '新建日历', '添加事件', '查日历', '日程', 'calendar', 'event'],
+  ],
+  [
+    'tavily_',
+    [
+      '搜索',
+      '查询',
+      '查一下',
+      '了解一下',
+      '新闻',
+      '天气',
+      '股价',
+      'search',
+      'news',
+      'weather',
+      'latest',
+    ],
+  ],
+  [
+    'browser_',
+    [
+      '打开网页',
+      '访问网站',
+      '浏览网页',
+      '网址',
+      'open url',
+      'browse',
+      'http://',
+      'https://',
+    ],
+  ],
+  [
+    'system_stats',
+    ['系统状态', 'cpu', '内存', '磁盘', '负载', 'system stats', 'memory usage'],
+  ],
+  ['bash_exec', ['执行命令', '跑一下', 'run command', 'execute']],
+  ['read_file', ['读取文件', '查看文件', '打开文件', 'read file']],
+  ['write_file', ['写文件', '写入文件', '更新文件', 'write file']],
+  ['bark_push', ['提醒', '通知', '推送', 'notify', 'remind']],
+  ['github_', ['github', 'pull request', 'pr', 'issue', '通知']],
+];
+
+/**
  * Intent → allowed tool name prefixes/groups.
  * null means no filtering (all tools allowed).
- * 'memory' and 'http_request' are always included as baseline.
+ * 'memory_write' is always included as baseline.
  */
 const INTENT_ALLOWED_GROUPS: Record<string, string[] | null> = {
-  chat: [],
+  // bark_push allowed for chat so model can send self-notifications/reminders
+  chat: ['bark_push'],
   search_web: ['tavily_', 'http_request'],
   tavily_search: ['tavily_', 'http_request'],
   browse_web: ['browser_', 'http_request'],
@@ -2107,23 +2170,62 @@ const INTENT_ALLOWED_GROUPS: Record<string, string[] | null> = {
     'bash_exec',
     'read_file',
     'write_file',
+    'bark_push',
+    'github_',
   ],
 };
+
+/**
+ * Expand the allowed prefix set by scanning rawPrompt for secondary intents.
+ * Handles compound messages like "查一下天气然后发邮件给老板".
+ */
+function expandAllowedForSecondaryIntents(
+  primaryAllowed: string[],
+  rawPrompt: string,
+  primaryIntent: string,
+): string[] {
+  const m = rawPrompt.toLowerCase();
+  const merged = new Set(primaryAllowed);
+  for (const [prefix, keywords] of SECONDARY_INTENT_KEYWORDS) {
+    // Skip prefixes already covered by the primary intent's allowed list
+    if (
+      primaryAllowed.some((p) => prefix.startsWith(p) || p.startsWith(prefix))
+    )
+      continue;
+    if (keywords.some((k) => m.includes(k))) {
+      merged.add(prefix);
+      logger.debug(
+        { primaryIntent, secondaryPrefix: prefix },
+        '[intent] secondary intent detected — expanding tool set',
+      );
+    }
+  }
+  return [...merged];
+}
 
 function filterToolsByIntent(
   tools: OllamaToolDefinition[],
   intent: string | undefined,
+  rawPrompt?: string,
 ): OllamaToolDefinition[] {
   if (!intent || !(intent in INTENT_ALLOWED_GROUPS)) return tools;
 
   const allowed = INTENT_ALLOWED_GROUPS[intent];
   if (allowed === null) return tools; // no filtering
 
+  // Expand tool set for compound messages (e.g. search + email in one message)
+  const effectiveAllowed =
+    rawPrompt && allowed.length > 0
+      ? expandAllowedForSecondaryIntents(allowed, rawPrompt, intent)
+      : allowed;
+
   // memory_write is always included as baseline
   const filtered = tools.filter((t) => {
     const name = t.function.name;
     if (name === 'memory_write') return true;
-    return allowed.some((prefix) => name.startsWith(prefix) || name === prefix);
+    return effectiveAllowed.some(
+      (prefix) => name.startsWith(prefix) || name === prefix,
+    );
   });
 
   logger.info(
@@ -2141,6 +2243,7 @@ function filterToolsByIntent(
 export function getOllamaToolDefinitions(opts?: {
   isMain?: boolean;
   intent?: string;
+  rawPrompt?: string;
 }): OllamaToolDefinition[] {
   const adminTools: OllamaToolDefinition[] =
     OLLAMA_ADMIN_TOOLS && opts?.isMain
@@ -2245,7 +2348,7 @@ export function getOllamaToolDefinitions(opts?: {
     },
   ];
 
-  return filterToolsByIntent(allTools, opts?.intent);
+  return filterToolsByIntent(allTools, opts?.intent, opts?.rawPrompt);
 }
 
 async function executeSingleToolCall(
