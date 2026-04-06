@@ -66,6 +66,8 @@ export interface NewMessage {
   reply_to_message_id?: string;
   reply_to_message_content?: string;
   reply_to_sender_name?: string;
+  /** Base64-encoded image(s) attached to this message. Not persisted to DB. */
+  imageData?: string[];
 }
 
 export interface ScheduledTask {

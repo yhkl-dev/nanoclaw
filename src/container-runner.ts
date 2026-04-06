@@ -50,6 +50,8 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  /** Base64-encoded images to include with the user message (multimodal). */
+  images?: string[];
 }
 
 export interface ContainerOutput {

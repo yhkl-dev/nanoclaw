@@ -1345,7 +1345,6 @@ async function chatWithOllama(
           : {}),
       }),
       signal: createFetchTimeout(timeoutMs),
-      // @ts-expect-error -- Node.js 18+ supports dispatcher option for connection pooling
       dispatcher: getOllamaDispatcher(),
     });
 
@@ -1634,7 +1633,9 @@ export async function runDirectOllamaAgent(
         ? buildSessionSummaryMessages(sessionState.summary)
         : []),
       ...history,
-      userMessage,
+      input.images?.length
+        ? { ...userMessage, images: input.images }
+        : userMessage,
     ];
 
     logger.debug(
@@ -1932,10 +1933,10 @@ export async function runDirectOllamaAgent(
         : assistantText;
     const shouldPersist =
       abortedForLoopGuard || !hadToolFailure || hadToolSuccess;
-    const finalMessages = [
-      ...history,
+    const finalMessages: OllamaMessage[] = [
+      ...(history as OllamaMessage[]),
       userMessage,
-      { role: 'assistant', content: persistedAssistantText },
+      { role: 'assistant' as const, content: persistedAssistantText },
     ];
     if (shouldPersist) {
       saveSessionMessages(

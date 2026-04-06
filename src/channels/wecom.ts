@@ -13,6 +13,7 @@ import {
   WECOM_BOT_SECRET,
   WECOM_WS_URL,
 } from '../config.js';
+import { downloadWeComImage } from '../wecom-image.js';
 import { storeChatMetadata, storeMessageDirect } from '../db.js';
 import { logger } from '../logger.js';
 import type { Channel, NewMessage } from '../types.js';
@@ -40,7 +41,7 @@ function buildMessageContent(message: BaseMessage): string {
     case 'voice':
       return message.voice?.content?.trim() || '[voice message]';
     case 'image':
-      return '[image message]';
+      return message.image?.url ? '[image]' : '[image message]';
     case 'file':
       return '[file message]';
     case 'mixed':
@@ -49,7 +50,7 @@ function buildMessageContent(message: BaseMessage): string {
           .map((item: { msgtype: string; text?: { content: string } }) => {
             if (item.msgtype === 'text')
               return item.text?.content?.trim() || '';
-            if (item.msgtype === 'image') return '[image message]';
+            if (item.msgtype === 'image') return '[image]';
             return '';
           })
           .filter(Boolean)
@@ -59,6 +60,24 @@ function buildMessageContent(message: BaseMessage): string {
     default:
       return '';
   }
+}
+
+/** Extract all image {url, aeskey} pairs from a message. */
+function extractImageRefs(
+  message: BaseMessage,
+): { url: string; aeskey?: string }[] {
+  const refs: { url: string; aeskey?: string }[] = [];
+  if (message.msgtype === 'image' && message.image?.url) {
+    refs.push({ url: message.image.url, aeskey: message.image.aeskey });
+  }
+  if (message.msgtype === 'mixed' && message.mixed?.msg_item) {
+    for (const item of message.mixed.msg_item) {
+      if (item.msgtype === 'image' && item.image?.url) {
+        refs.push({ url: item.image.url, aeskey: item.image.aeskey });
+      }
+    }
+  }
+  return refs;
 }
 
 function toTimestamp(message: BaseMessage): string {
@@ -220,6 +239,7 @@ export class WeComChannel implements Channel {
         isGroup,
       );
 
+      const imageRefs = extractImageRefs(body);
       const message: NewMessage = {
         id: body.msgid,
         chat_jid: chatJid,
@@ -228,7 +248,23 @@ export class WeComChannel implements Channel {
         content,
         timestamp,
       };
-      this.opts.onMessage(chatJid, message);
+
+      if (imageRefs.length > 0) {
+        // Download images async then deliver message; URL expires in 5 minutes.
+        Promise.all(
+          imageRefs.map((ref) => downloadWeComImage(ref.url, ref.aeskey)),
+        )
+          .then((results) => {
+            const imageData = results.filter((r): r is string => r !== null);
+            this.opts.onMessage(chatJid, { ...message, imageData });
+          })
+          .catch(() => {
+            // Deliver without image on download failure
+            this.opts.onMessage(chatJid, message);
+          });
+      } else {
+        this.opts.onMessage(chatJid, message);
+      }
     });
 
     client.on('authenticated', () => {
