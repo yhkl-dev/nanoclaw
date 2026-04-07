@@ -1,0 +1,154 @@
+/**
+ * Post-session reflection for Claude container runs.
+ * After each successful agent session, optionally calls Haiku to extract
+ * learnings and append them to the group's CLAUDE.md.
+ */
+import fs from 'fs';
+import path from 'path';
+
+import { GROUPS_DIR } from './config.js';
+import { logger } from './logger.js';
+
+const REFLECTION_TIMEOUT_MS = 20_000;
+const PROACTIVE_REFLECTION_RATE = 0.2;
+
+const CORRECTION_SIGNALS = [
+  '不对',
+  '你错了',
+  '错了',
+  '搞错了',
+  '重新来',
+  '重来',
+  '不是这样',
+  '理解错了',
+  '你理解错了',
+  'wrong',
+  'incorrect',
+  "that's not",
+  "that's wrong",
+  'not right',
+  'you misunderstood',
+];
+
+/**
+ * Scan the formatted prompt string for correction signals from the user.
+ */
+export function detectCorrectionSignals(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  return CORRECTION_SIGNALS.some((s) => lower.includes(s.toLowerCase()));
+}
+
+/**
+ * Fire-and-forget post-session reflection using Haiku 4.5.
+ * Appends a brief memory note to the group's CLAUDE.md when useful.
+ *
+ * Call without await after a successful container run:
+ *   triggerSessionReflection(...).catch(() => {});
+ */
+export async function triggerSessionReflection(
+  groupFolder: string,
+  prompt: string,
+  result: string,
+  hadCorrections: boolean,
+): Promise<void> {
+  // Defer so the caller returns first.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  if (!hadCorrections && Math.random() > PROACTIVE_REFLECTION_RATE) return;
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    logger.debug(
+      { group: groupFolder },
+      '[reflection] no ANTHROPIC_API_KEY, skipping',
+    );
+    return;
+  }
+
+  // Strip XML/tags for a readable excerpt.
+  const cleanPrompt = prompt
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1200);
+  const cleanResult = result
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 600);
+
+  const purpose = hadCorrections
+    ? 'The user corrected the assistant in this conversation. Focus on what went wrong and the correct approach.'
+    : 'Review this conversation for any user preferences or environment details worth remembering.';
+
+  const reflectionPrompt = `${purpose}
+
+User messages (excerpt):
+${cleanPrompt}
+
+Assistant response (excerpt):
+${cleanResult}
+
+Write a brief memory note (under 80 words) covering:
+- User preferences or habits discovered
+- Mistakes made and the correct approach
+- Environment details (paths, tools, configs) useful for future sessions
+
+If there is nothing worth remembering, respond with exactly: nothing to note`;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REFLECTION_TIMEOUT_MS);
+
+    let content = '';
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 200,
+          messages: [{ role: 'user', content: reflectionPrompt }],
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!resp.ok) throw new Error(`Anthropic API ${resp.status}`);
+      const data = (await resp.json()) as {
+        content: Array<{ type: string; text: string }>;
+      };
+      content = (data.content?.[0]?.text ?? '').trim();
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
+
+    if (!content || content.toLowerCase().includes('nothing to note')) {
+      logger.debug({ group: groupFolder }, '[reflection] nothing to note');
+      return;
+    }
+
+    const groupDir = path.join(GROUPS_DIR, groupFolder);
+    fs.mkdirSync(groupDir, { recursive: true });
+    const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const section = hadCorrections ? 'Lesson Learned' : 'Session Notes';
+    const entry = `\n## ${section} (${timestamp})\n${content}\n`;
+    fs.appendFileSync(claudeMdPath, entry, 'utf-8');
+
+    logger.info(
+      { group: groupFolder, section, chars: content.length },
+      '[reflection] wrote session learnings to CLAUDE.md',
+    );
+  } catch (err) {
+    const isTimeout = err instanceof Error && err.name === 'AbortError';
+    logger.debug(
+      { err: isTimeout ? 'timeout' : String(err), group: groupFolder },
+      '[reflection] failed (non-fatal)',
+    );
+  }
+}

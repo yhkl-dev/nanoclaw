@@ -314,24 +314,57 @@ If a user wants tasks running more than ~2x daily and a script can't reduce agen
 
 ## Self-Iteration (Code Modification)
 
-You have `bash_exec`, `read_file`, and `write_file` tools that run directly on the host. Use these to improve your own codebase.
+There are two paths for code changes:
+
+### Path A: Direct (immediate, no review gate)
+
+Use `bash_exec`, `read_file`, and `write_file` tools that run directly on the host.
 
 **Project root**: `/home/orangepi/github.com/nanoclaw`
 
-### Workflow for code changes
-
-1. **Read** the relevant source file with `read_file` (e.g. `src/ollama-direct.ts`)
+1. **Read** the relevant source file with `read_file`
 2. **Edit** using `write_file` with the full updated content, or use `bash_exec` to apply a targeted patch
 3. **Build**: `bash_exec` → `npm run build`
 4. **Restart**: `bash_exec` → `systemctl --user restart nanoclaw`
 5. **Verify**: `bash_exec` → `systemctl --user status nanoclaw` + check `tail -20 logs/nanoclaw.log`
 
+### Path B: Propose (human review gate)
+
+Write a JSON file to `/workspace/ipc/tasks/` and the host process will present the diff to the user for approval.
+
+**Propose a change:**
+```bash
+cat > /workspace/ipc/tasks/propose_$(date +%s).json << 'EOF'
+{
+  "type": "propose_edit",
+  "filePath": "src/config.ts",
+  "description": "Brief description of what this changes and why",
+  "newContent": "... full file content ..."
+}
+EOF
+```
+
+The host will show the unified diff to the user in this chat and ask for confirmation.
+
+**Apply approved changes** (after user says yes):
+```bash
+echo '{"type":"apply_edit"}' > /workspace/ipc/tasks/apply_$(date +%s).json
+```
+
+The host will apply the files, run `npm run build`, and report back. Then restart with `systemctl --user restart nanoclaw`.
+
+**Reject / discard proposals:**
+```bash
+echo '{"type":"reject_edit"}' > /workspace/ipc/tasks/reject_$(date +%s).json
+```
+
 ### Key source files
 
 | File | Purpose |
 |------|---------|
-| `src/ollama-direct.ts` | Ollama agent loop, system prompt, tool routing |
-| `src/ollama-tool-runtime.ts` | Tool definitions and execution (bash_exec, http_request, browser) |
+| `src/index.ts` | Main orchestrator: message loop, agent invocation |
+| `src/ipc.ts` | IPC handler (propose_edit / apply_edit / reject_edit live here) |
+| `src/reflection.ts` | Post-session Haiku reflection |
 | `groups/main/CLAUDE.md` | Your own memory and instructions (this file) |
 | `src/config.ts` | Environment variable config |
 | `.env` | Runtime config (model, channels, proxy) |
@@ -343,3 +376,4 @@ You have `bash_exec`, `read_file`, and `write_file` tools that run directly on t
 - Keep changes minimal and targeted. Don't rewrite files wholesale.
 - If a build fails, fix the error before restarting.
 - You can use `bash_exec` to run `git diff src/` to review what changed before building.
+- Use Path B (propose) for risky or user-visible changes. Use Path A for quick fixes you are confident about.

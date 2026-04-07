@@ -3,15 +3,30 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { execFile } from 'child_process';
+
+import {
+  DATA_DIR,
+  IPC_POLL_INTERVAL,
+  PROJECT_ROOT,
+  TIMEZONE,
+} from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import {
+  applyPendingEdits,
+  clearPendingEdits,
+  formatPendingEditsSummary,
+  loadPendingEdits,
+  recordPendingEdit,
+} from './ollama-edit-reviewer.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  notifyMainGroup: (text: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -173,6 +188,10 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For propose_edit / apply_edit
+    filePath?: string;
+    description?: string;
+    newContent?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -458,6 +477,121 @@ export async function processTaskIpc(
         logger.warn(
           { data },
           'Invalid register_group request - missing required fields',
+        );
+      }
+      break;
+
+    case 'propose_edit':
+      // Only the main group can propose code edits.
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized propose_edit attempt blocked',
+        );
+        break;
+      }
+      if (!data.filePath || !data.newContent) {
+        logger.warn(
+          { sourceGroup },
+          'propose_edit missing filePath or newContent',
+        );
+        break;
+      }
+      {
+        const { id, diff, isNewFile } = recordPendingEdit(
+          sourceGroup,
+          data.filePath,
+          data.description ?? '',
+          data.newContent,
+        );
+        const header = isNewFile
+          ? `New file: ${data.filePath}\n`
+          : `Changes to ${data.filePath}:\n\`\`\`diff\n${diff.slice(0, 3000)}\n\`\`\`\n`;
+        const msg =
+          `[Code change proposed — ID: ${id}]\n\n` +
+          header +
+          `\nDescription: ${data.description ?? '(none)'}` +
+          `\n\nReply "apply edits" to apply and build, or "reject edits" to discard.`;
+        logger.info(
+          { sourceGroup, file: data.filePath, id },
+          'propose_edit recorded, notifying main group',
+        );
+        await deps.notifyMainGroup(msg);
+      }
+      break;
+
+    case 'apply_edit':
+      // Only the main group can apply edits.
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized apply_edit attempt blocked');
+        break;
+      }
+      {
+        const pending = loadPendingEdits(sourceGroup);
+        if (pending.length === 0) {
+          await deps.notifyMainGroup('No pending edits to apply.');
+          break;
+        }
+        const result = await applyPendingEdits(sourceGroup);
+        if (!result.buildSuccess) {
+          const msg =
+            `Build check failed — edits reverted.\n\n` +
+            `\`\`\`\n${result.buildOutput.slice(0, 2000)}\n\`\`\``;
+          await deps.notifyMainGroup(msg);
+          break;
+        }
+        // Type-check passed; run the full build to emit JS.
+        await new Promise<void>((resolve) => {
+          execFile(
+            'npm',
+            ['run', 'build'],
+            { cwd: PROJECT_ROOT, timeout: 120_000 },
+            (err, stdout, stderr) => {
+              if (err) {
+                const out = (stderr || stdout || String(err)).slice(0, 2000);
+                deps
+                  .notifyMainGroup(
+                    `Full build failed — dist/ not updated.\n\`\`\`\n${out}\n\`\`\``,
+                  )
+                  .catch(() => {});
+              } else {
+                const applied = result.applied.join(', ');
+                deps
+                  .notifyMainGroup(
+                    `Edits applied and built successfully.\nFiles: ${applied}\n\nRestart the service to load the new code.`,
+                  )
+                  .catch(() => {});
+              }
+              resolve();
+            },
+          );
+        });
+        logger.info(
+          { sourceGroup, applied: result.applied },
+          'apply_edit completed',
+        );
+      }
+      break;
+
+    case 'reject_edit':
+      // Only the main group can reject edits.
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized reject_edit attempt blocked',
+        );
+        break;
+      }
+      {
+        const pending = loadPendingEdits(sourceGroup);
+        if (pending.length === 0) {
+          await deps.notifyMainGroup('No pending edits to reject.');
+          break;
+        }
+        clearPendingEdits(sourceGroup);
+        logger.info({ sourceGroup }, 'reject_edit: pending edits cleared');
+        await deps.notifyMainGroup(
+          `Pending edits discarded (${pending.length} file(s)).`,
         );
       }
       break;

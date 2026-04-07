@@ -38,6 +38,10 @@ import {
   PROXY_BIND_HOST,
 } from './container-runtime.js';
 import {
+  detectCorrectionSignals,
+  triggerSessionReflection,
+} from './reflection.js';
+import {
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
@@ -461,6 +465,16 @@ async function runAgent(
       return 'error';
     }
 
+    // Fire-and-forget post-session reflection via Haiku.
+    if (output.result) {
+      triggerSessionReflection(
+        group.folder,
+        prompt,
+        output.result,
+        detectCorrectionSignals(prompt),
+      ).catch(() => {});
+    }
+
     return 'success';
   } catch (err) {
     logger.error({ group: group.name, err }, 'Agent error');
@@ -786,6 +800,22 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
+    },
+    notifyMainGroup: async (text) => {
+      const mainEntry = Object.entries(registeredGroups).find(
+        ([, g]) => g.isMain,
+      );
+      if (!mainEntry) {
+        logger.warn('notifyMainGroup: no main group registered');
+        return;
+      }
+      const [jid] = mainEntry;
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'notifyMainGroup: no channel owns main group JID');
+        return;
+      }
+      await channel.sendMessage(jid, text);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
