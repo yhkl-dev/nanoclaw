@@ -427,12 +427,26 @@ echo '{"type":"apply_edit"}' > /workspace/ipc/tasks/apply_$(date +%s).json
 
 The host will apply the files, run `npm run build`, and report back.
 
-**Restart the service** (after a successful build):
+**Apply + build + restart in one step** (recommended for trusted changes):
+```bash
+echo '{"type":"apply_and_restart"}' > /workspace/ipc/tasks/apply_restart_$(date +%s).json
+```
+
+Chains typecheck → full build → restart automatically. Stops and reports back on any failure without restarting.
+
+**Restart the service only** (after a manual build):
 ```bash
 echo '{"type":"restart_service"}' > /workspace/ipc/tasks/restart_$(date +%s).json
 ```
 
 The host detects the platform (macOS → launchctl, Linux → systemctl) and restarts nanoclaw. You'll receive a "Restarting service…" message before the process exits.
+
+**Health check** (confirm restart succeeded):
+```bash
+echo '{"type":"ping"}' > /workspace/ipc/tasks/ping_$(date +%s).json
+```
+
+Returns: version, uptime, and current timestamp.
 
 **Reject / discard proposals:**
 ```bash

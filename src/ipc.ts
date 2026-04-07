@@ -639,6 +639,105 @@ export async function processTaskIpc(
       }
       break;
 
+    case 'apply_and_restart':
+      // Apply pending edits, build, and restart in one step. Main group only.
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized apply_and_restart attempt blocked',
+        );
+        break;
+      }
+      {
+        const pending = loadPendingEdits(sourceGroup);
+        if (pending.length === 0) {
+          await deps.notifyMainGroup('No pending edits to apply.');
+          break;
+        }
+        const applyResult = await applyPendingEdits(sourceGroup);
+        if (!applyResult.buildSuccess) {
+          await deps.notifyMainGroup(
+            `Typecheck failed — edits reverted.\n\`\`\`\n${applyResult.buildOutput.slice(0, 2000)}\n\`\`\``,
+          );
+          break;
+        }
+        // Full build
+        const buildOk = await new Promise<boolean>((resolve) => {
+          execFile(
+            'npm',
+            ['run', 'build'],
+            { cwd: PROJECT_ROOT, timeout: 120_000 },
+            (err, stdout, stderr) => {
+              if (err) {
+                const out = (stderr || stdout || String(err)).slice(0, 2000);
+                deps
+                  .notifyMainGroup(
+                    `Build failed — dist/ not updated.\n\`\`\`\n${out}\n\`\`\``,
+                  )
+                  .catch(() => {});
+                resolve(false);
+              } else {
+                resolve(true);
+              }
+            },
+          );
+        });
+        if (!buildOk) break;
+        // Restart
+        const isMacAR = process.platform === 'darwin';
+        const restartCmd = isMacAR
+          ? [
+              'launchctl',
+              'kickstart',
+              '-k',
+              `gui/${process.getuid!()}/com.nanoclaw`,
+            ]
+          : ['systemctl', '--user', 'restart', 'nanoclaw'];
+        const applied = applyResult.applied.join(', ');
+        logger.info(
+          { sourceGroup, applied },
+          'apply_and_restart: build ok, restarting',
+        );
+        await deps.notifyMainGroup(
+          `Edits applied (${applied}), build succeeded. Restarting…`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        execFile(
+          restartCmd[0],
+          restartCmd.slice(1),
+          { timeout: 15_000 },
+          (err) => {
+            if (err) logger.error({ err }, 'apply_and_restart: restart failed');
+          },
+        );
+      }
+      break;
+
+    case 'ping':
+      // Health check — main group only.
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized ping attempt blocked');
+        break;
+      }
+      {
+        const uptimeSec = Math.floor(process.uptime());
+        const h = Math.floor(uptimeSec / 3600);
+        const m = Math.floor((uptimeSec % 3600) / 60);
+        const s = uptimeSec % 60;
+        const uptimeStr = `${h}h ${m}m ${s}s`;
+        let version = 'unknown';
+        try {
+          const pkg = JSON.parse(
+            fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf-8'),
+          ) as { version: string };
+          version = pkg.version;
+        } catch {}
+        await deps.notifyMainGroup(
+          `pong\nversion: ${version}\nuptime: ${uptimeStr}\ntime: ${new Date().toISOString()}`,
+        );
+      }
+      break;
+
     case 'restart_service':
       // Only the main group can restart the service.
       if (!isMain) {
