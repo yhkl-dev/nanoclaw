@@ -100,10 +100,7 @@ function pruneConversations(): void {
   }
 
   if (totalPruned > 0) {
-    logger.info(
-      { totalPruned },
-      '[cleanup] pruned old conversation entries',
-    );
+    logger.info({ totalPruned }, '[cleanup] pruned old conversation entries');
   }
 }
 
@@ -112,12 +109,7 @@ function pruneConversations(): void {
  * Keeps the tail of the file (newest entries) when truncating.
  */
 function pruneMemoryFiles(): void {
-  const MEMORY_FILES = [
-    'lessons.md',
-    'notes.md',
-    'preferences.md',
-    'facts.md',
-  ];
+  const MEMORY_FILES = ['lessons.md', 'notes.md', 'preferences.md', 'facts.md'];
 
   let groupDirs: string[];
   try {
