@@ -416,6 +416,7 @@ async function runQuery(
           'mcp__nanoclaw__*',
           'mcp__ollama__*',
           'mcp__gmail__*',
+          'mcp__google_calendar__*',
         ],
         env: sdkEnv,
         permissionMode: 'bypassPermissions',
@@ -438,6 +439,10 @@ async function runQuery(
           gmail: {
             command: 'npx',
             args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+          },
+          google_calendar: {
+            command: 'node',
+            args: [path.join(path.dirname(mcpServerPath), 'google-calendar-mcp-stdio.js')],
           },
         },
         hooks: {
