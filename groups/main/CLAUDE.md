@@ -393,7 +393,7 @@ Use `bash_exec`, `read_file`, and `write_file` tools that run directly on the ho
 
 Write a JSON file to `/workspace/ipc/tasks/` and the host process will present the diff to the user for approval.
 
-**Propose a change:**
+**Propose a change (single file):**
 ```bash
 cat > /workspace/ipc/tasks/propose_$(date +%s).json << 'EOF'
 {
@@ -405,6 +405,19 @@ cat > /workspace/ipc/tasks/propose_$(date +%s).json << 'EOF'
 EOF
 ```
 
+**Propose a change (multiple files):**
+```bash
+cat > /workspace/ipc/tasks/propose_$(date +%s).json << 'EOF'
+{
+  "type": "propose_edit",
+  "files": [
+    { "filePath": "src/foo.ts", "description": "why", "newContent": "..." },
+    { "filePath": "src/bar.ts", "description": "why", "newContent": "..." }
+  ]
+}
+EOF
+```
+
 The host will show the unified diff to the user in this chat and ask for confirmation.
 
 **Apply approved changes** (after user says yes):
@@ -412,7 +425,14 @@ The host will show the unified diff to the user in this chat and ask for confirm
 echo '{"type":"apply_edit"}' > /workspace/ipc/tasks/apply_$(date +%s).json
 ```
 
-The host will apply the files, run `npm run build`, and report back. Then restart with `systemctl --user restart nanoclaw`.
+The host will apply the files, run `npm run build`, and report back.
+
+**Restart the service** (after a successful build):
+```bash
+echo '{"type":"restart_service"}' > /workspace/ipc/tasks/restart_$(date +%s).json
+```
+
+The host detects the platform (macOS → launchctl, Linux → systemctl) and restarts nanoclaw. You'll receive a "Restarting service…" message before the process exits.
 
 **Reject / discard proposals:**
 ```bash

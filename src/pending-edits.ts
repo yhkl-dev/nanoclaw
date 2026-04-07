@@ -141,7 +141,7 @@ export function recordPendingEdit(
 
   logger.info(
     { group: groupFolder, file: fileName, id: proposal.id, isNewFile },
-    '[edit-reviewer] recorded pending edit',
+    '[pending-edits] recorded pending edit',
   );
 
   return { id: proposal.id, diff, isNewFile };
@@ -177,12 +177,12 @@ export async function applyPendingEdits(
       fs.mkdirSync(path.dirname(proposal.filePath), { recursive: true });
       fs.writeFileSync(proposal.filePath, proposal.newContent, 'utf-8');
       applied.push(relPath);
-      logger.info({ file: relPath }, '[edit-reviewer] applied edit');
+      logger.info({ file: relPath }, '[pending-edits] applied edit');
     } catch (err) {
       skipped.push(relPath);
       logger.warn(
         { file: relPath, err },
-        '[edit-reviewer] failed to write file',
+        '[pending-edits] failed to write file',
       );
     }
   }
@@ -198,7 +198,7 @@ export async function applyPendingEdits(
     });
     buildOutput = (out ?? '').slice(0, 2000);
     buildSuccess = true;
-    logger.info({ group: groupFolder }, '[edit-reviewer] typecheck passed');
+    logger.info({ group: groupFolder }, '[pending-edits] typecheck passed');
   } catch (e: unknown) {
     if (e && typeof e === 'object') {
       buildOutput = (
@@ -210,7 +210,7 @@ export async function applyPendingEdits(
     buildSuccess = false;
     logger.warn(
       { group: groupFolder },
-      '[edit-reviewer] typecheck failed — reverting edits',
+      '[pending-edits] typecheck failed — reverting edits',
     );
     // Revert all applied files.
     for (const filePath of applied) {

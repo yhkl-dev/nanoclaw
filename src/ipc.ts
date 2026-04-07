@@ -21,7 +21,7 @@ import {
   formatPendingEditsSummary,
   loadPendingEdits,
   recordPendingEdit,
-} from './ollama-edit-reviewer.js';
+} from './pending-edits.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -192,6 +192,12 @@ export async function processTaskIpc(
     filePath?: string;
     description?: string;
     newContent?: string;
+    // Multi-file propose_edit
+    files?: Array<{
+      filePath: string;
+      newContent: string;
+      description?: string;
+    }>;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -481,7 +487,7 @@ export async function processTaskIpc(
       }
       break;
 
-    case 'propose_edit':
+    case 'propose_edit': {
       // Only the main group can propose code edits.
       if (!isMain) {
         logger.warn(
@@ -490,35 +496,72 @@ export async function processTaskIpc(
         );
         break;
       }
-      if (!data.filePath || !data.newContent) {
+
+      // Build a normalized list of files to propose (supports single or multi-file).
+      const filesToPropose: Array<{
+        filePath: string;
+        newContent: string;
+        description: string;
+      }> = [];
+
+      if (data.files && data.files.length > 0) {
+        for (const f of data.files) {
+          if (!f.filePath || !f.newContent) {
+            logger.warn(
+              { sourceGroup, file: f.filePath },
+              'propose_edit: skipping entry missing filePath or newContent',
+            );
+            continue;
+          }
+          filesToPropose.push({
+            filePath: f.filePath,
+            newContent: f.newContent,
+            description: f.description ?? '',
+          });
+        }
+      } else if (data.filePath && data.newContent) {
+        filesToPropose.push({
+          filePath: data.filePath,
+          newContent: data.newContent,
+          description: data.description ?? '',
+        });
+      } else {
         logger.warn(
           { sourceGroup },
-          'propose_edit missing filePath or newContent',
+          'propose_edit missing filePath/newContent or files array',
         );
         break;
       }
-      {
+
+      if (filesToPropose.length === 0) break;
+
+      const sections: string[] = [];
+      let lastId = '';
+      for (const f of filesToPropose) {
         const { id, diff, isNewFile } = recordPendingEdit(
           sourceGroup,
-          data.filePath,
-          data.description ?? '',
-          data.newContent,
+          f.filePath,
+          f.description,
+          f.newContent,
         );
+        lastId = id;
         const header = isNewFile
-          ? `New file: ${data.filePath}\n`
-          : `Changes to ${data.filePath}:\n\`\`\`diff\n${diff.slice(0, 3000)}\n\`\`\`\n`;
-        const msg =
-          `[Code change proposed — ID: ${id}]\n\n` +
-          header +
-          `\nDescription: ${data.description ?? '(none)'}` +
-          `\n\nReply "apply edits" to apply and build, or "reject edits" to discard.`;
-        logger.info(
-          { sourceGroup, file: data.filePath, id },
-          'propose_edit recorded, notifying main group',
-        );
-        await deps.notifyMainGroup(msg);
+          ? `New file: ${f.filePath}`
+          : `Changes to ${f.filePath}:\n\`\`\`diff\n${diff.slice(0, 2000)}\n\`\`\``;
+        sections.push(`${header}\nDescription: ${f.description || '(none)'}`);
       }
+
+      const msg =
+        `[Code change proposed — ${filesToPropose.length} file(s), last ID: ${lastId}]\n\n` +
+        sections.join('\n\n---\n\n') +
+        `\n\nReply "apply edits" to apply and build, or "reject edits" to discard.`;
+      logger.info(
+        { sourceGroup, files: filesToPropose.map((f) => f.filePath), lastId },
+        'propose_edit recorded, notifying main group',
+      );
+      await deps.notifyMainGroup(msg);
       break;
+    }
 
     case 'apply_edit':
       // Only the main group can apply edits.
@@ -593,6 +636,37 @@ export async function processTaskIpc(
         await deps.notifyMainGroup(
           `Pending edits discarded (${pending.length} file(s)).`,
         );
+      }
+      break;
+
+    case 'restart_service':
+      // Only the main group can restart the service.
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized restart_service attempt blocked',
+        );
+        break;
+      }
+      {
+        const isMac = process.platform === 'darwin';
+        const cmd = isMac
+          ? [
+              'launchctl',
+              'kickstart',
+              '-k',
+              `gui/${process.getuid!()}/com.nanoclaw`,
+            ]
+          : ['systemctl', '--user', 'restart', 'nanoclaw'];
+        logger.info({ sourceGroup, cmd }, 'restart_service: restarting');
+        await deps.notifyMainGroup('Restarting service…');
+        // Small delay so the message is delivered before the process exits.
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        execFile(cmd[0], cmd.slice(1), { timeout: 15_000 }, (err) => {
+          if (err) {
+            logger.error({ err }, 'restart_service: restart command failed');
+          }
+        });
       }
       break;
 

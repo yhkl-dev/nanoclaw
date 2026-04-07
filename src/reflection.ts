@@ -1,7 +1,8 @@
 /**
- * Post-session reflection for Claude container runs.
- * After each successful agent session, optionally calls Haiku to extract
- * learnings and append them to the group's CLAUDE.md.
+ * Post-session reflection and conversation archiving for Claude container runs.
+ * After each successful agent session:
+ *  1. Always archives a compact conversation entry to conversations/YYYY-MM.md.
+ *  2. Optionally calls Haiku to extract learnings into memory/ files.
  */
 import fs from 'fs';
 import path from 'path';
@@ -39,8 +40,52 @@ export function detectCorrectionSignals(prompt: string): boolean {
 }
 
 /**
+ * Append a compact conversation entry to conversations/YYYY-MM.md.
+ * Always runs — not subject to the proactive reflection rate.
+ */
+function archiveConversation(
+  groupFolder: string,
+  prompt: string,
+  result: string,
+): void {
+  try {
+    const convDir = path.join(GROUPS_DIR, groupFolder, 'conversations');
+    fs.mkdirSync(convDir, { recursive: true });
+
+    const now = new Date();
+    const month = now.toISOString().slice(0, 7); // YYYY-MM
+    const datetime = now.toISOString().slice(0, 16).replace('T', ' '); // YYYY-MM-DD HH:MM
+
+    const promptExcerpt = prompt
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 400);
+    const resultExcerpt = result
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 300);
+
+    const entry =
+      `\n## ${datetime}\n` +
+      `**User:** ${promptExcerpt}\n\n` +
+      `**Agent:** ${resultExcerpt}\n`;
+
+    const filePath = path.join(convDir, `${month}.md`);
+    fs.appendFileSync(filePath, entry, 'utf-8');
+    logger.debug(
+      { group: groupFolder, file: `${month}.md` },
+      '[archive] conversation logged',
+    );
+  } catch (err) {
+    logger.debug({ err, group: groupFolder }, '[archive] failed (non-fatal)');
+  }
+}
+
+/**
  * Fire-and-forget post-session reflection using Haiku 4.5.
- * Appends a brief memory note to the group's CLAUDE.md when useful.
+ * Always archives the conversation, then optionally writes a memory note.
  *
  * Call without await after a successful container run:
  *   triggerSessionReflection(...).catch(() => {});
@@ -53,6 +98,9 @@ export async function triggerSessionReflection(
 ): Promise<void> {
   // Defer so the caller returns first.
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  // Always archive the conversation regardless of reflection rate.
+  archiveConversation(groupFolder, prompt, result);
 
   if (!hadCorrections && Math.random() > PROACTIVE_REFLECTION_RATE) return;
 

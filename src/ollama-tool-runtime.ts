@@ -22,7 +22,7 @@ import {
   recordToolFailure,
   resetToolFailure,
 } from './ollama-failure-tracker.js';
-import { recordPendingEdit } from './ollama-edit-reviewer.js';
+import { recordPendingEdit } from './pending-edits.js';
 import {
   executeBrowserToolCall,
   getBrowserToolDefinitions,

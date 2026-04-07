@@ -46,7 +46,7 @@ import {
   clearPendingEdits,
   formatPendingEditsSummary,
   loadPendingEdits,
-} from './ollama-edit-reviewer.js';
+} from './pending-edits.js';
 import {
   assertValidGroupFolder,
   resolveGroupFolderPath,
