@@ -17,10 +17,6 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
-  MODEL_BACKEND,
-  OLLAMA_ADMIN_TOOLS,
-  OLLAMA_HOST,
-  OLLAMA_MODEL,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -34,7 +30,6 @@ import {
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { runDirectOllamaAgent } from './ollama-direct.js';
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -131,19 +126,6 @@ function removeFilesBySuffix(root: string, suffix: string): void {
       fs.rmSync(fullPath, { force: true });
     }
   }
-}
-
-export function normalizeOllamaHostForContainer(rawHost: string): string {
-  try {
-    const parsed = new URL(rawHost);
-    if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-      parsed.hostname = CONTAINER_HOST_GATEWAY;
-      return parsed.toString().replace(/\/$/, '');
-    }
-  } catch {
-    // Fall through and return the original value if parsing fails.
-  }
-  return rawHost;
 }
 
 function buildVolumeMounts(
@@ -364,22 +346,6 @@ function buildContainerArgs(
     args.push('-e', `ANTHROPIC_MODEL=${ANTHROPIC_MODEL}`);
   }
 
-  if (OLLAMA_ADMIN_TOOLS) {
-    args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
-  }
-  if (OLLAMA_HOST) {
-    args.push(
-      '-e',
-      `OLLAMA_HOST=${normalizeOllamaHostForContainer(OLLAMA_HOST)}`,
-    );
-  }
-  if (MODEL_BACKEND) {
-    args.push('-e', `MODEL_BACKEND=${MODEL_BACKEND}`);
-  }
-  if (OLLAMA_MODEL) {
-    args.push('-e', `OLLAMA_MODEL=${OLLAMA_MODEL}`);
-  }
-
   // HTTP proxy for container network access (e.g. Clash on LAN)
   if (CONTAINER_HTTP_PROXY) {
     args.push('-e', `HTTP_PROXY=${CONTAINER_HTTP_PROXY}`);
@@ -423,15 +389,6 @@ export async function runContainerAgent(
   onProcess: (proc: ChildProcess, containerName: string) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<ContainerOutput> {
-  if (MODEL_BACKEND === 'ollama') {
-    resolveGroupFolderPath(group.folder);
-    logger.info(
-      { group: group.name, host: OLLAMA_HOST, model: OLLAMA_MODEL },
-      'Running direct Ollama agent',
-    );
-    return runDirectOllamaAgent(group, input, onOutput);
-  }
-
   const startTime = Date.now();
 
   const groupDir = resolveGroupFolderPath(group.folder);

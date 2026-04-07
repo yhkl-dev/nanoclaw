@@ -37,7 +37,6 @@ import {
   ensureContainerRuntimeRunning,
   PROXY_BIND_HOST,
 } from './container-runtime.js';
-import { warmupOllamaModel } from './ollama-direct.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -595,13 +594,6 @@ function recoverPendingMessages(): void {
 }
 
 function ensureContainerSystemRunning(): void {
-  if (MODEL_BACKEND === 'ollama') {
-    logger.info('MODEL_BACKEND=ollama, skipping container runtime startup');
-    // Fire-and-forget: preload the model into VRAM so the first message is fast.
-    warmupOllamaModel().catch(() => {});
-    cleanupOrphans();
-    return;
-  }
   ensureContainerRuntimeRunning();
   cleanupOrphans();
 }
@@ -613,10 +605,10 @@ async function main(): Promise<void> {
   loadState();
   restoreRemoteControl();
 
-  const proxyServer =
-    MODEL_BACKEND === 'ollama'
-      ? null
-      : await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
+  const proxyServer = await startCredentialProxy(
+    CREDENTIAL_PROXY_PORT,
+    PROXY_BIND_HOST,
+  );
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {

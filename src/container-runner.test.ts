@@ -19,11 +19,6 @@ vi.mock('./config.js', () => ({
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
   MODEL_BACKEND: 'claude',
-  OLLAMA_ADMIN_TOOLS: false,
-  OLLAMA_HOST: undefined,
-  OLLAMA_HTTP_MAX_REDIRECTS: 5,
-  OLLAMA_HTTP_TIMEOUT_MS: 20_000,
-  OLLAMA_MODEL: undefined,
   TIMEZONE: 'America/Los_Angeles',
 }));
 
@@ -122,11 +117,7 @@ vi.mock('child_process', async () => {
   };
 });
 
-import {
-  runContainerAgent,
-  ContainerOutput,
-  normalizeOllamaHostForContainer,
-} from './container-runner.js';
+import { runContainerAgent, ContainerOutput } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -142,23 +133,6 @@ const testInput = {
   chatJid: 'test@g.us',
   isMain: false,
 };
-
-describe('normalizeOllamaHostForContainer', () => {
-  it('rewrites localhost to host.docker.internal', () => {
-    expect(normalizeOllamaHostForContainer('http://localhost:11434')).toBe(
-      'http://host.docker.internal:11434',
-    );
-    expect(normalizeOllamaHostForContainer('http://127.0.0.1:11434')).toBe(
-      'http://host.docker.internal:11434',
-    );
-  });
-
-  it('keeps non-loopback hosts unchanged', () => {
-    expect(normalizeOllamaHostForContainer('http://192.168.2.19:11434')).toBe(
-      'http://192.168.2.19:11434',
-    );
-  });
-});
 
 function emitOutputMarker(
   proc: ReturnType<typeof createFakeProcess>,
