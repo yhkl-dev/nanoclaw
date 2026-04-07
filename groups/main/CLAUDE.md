@@ -36,12 +36,73 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 ## Memory
 
-The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
+### Structure
 
-When you learn something important:
-- Create files for structured data (e.g., `customers.md`, `preferences.md`)
-- Split files larger than 500 lines into folders
-- Keep an index in your memory for the files you create
+```
+/workspace/group/
+  memory/
+    preferences.md   ← user communication style, output format preferences
+    facts.md         ← stable facts: paths, tools, environment, contacts
+    lessons.md       ← mistakes made and the correct approach (auto-filled by reflection)
+    notes.md         ← general session observations (auto-filled by reflection)
+  conversations/     ← archived past conversations (searchable with Grep)
+```
+
+### When to write proactively
+
+Write to `memory/` immediately when you notice something worth keeping — don't wait for the session to end:
+
+```bash
+# append a preference
+echo "\n## $(date +%Y-%m-%d)\nUser prefers bullet lists over tables for data." >> /workspace/group/memory/preferences.md
+
+# record a stable fact
+echo "\n## $(date +%Y-%m-%d)\nProject root on host: /home/user/github.com/myproject" >> /workspace/group/memory/facts.md
+```
+
+| File | What belongs here |
+|------|------------------|
+| `preferences.md` | Output format, tone, language, channel-specific quirks |
+| `facts.md` | Paths, credentials hints, tool versions, recurring contacts |
+| `lessons.md` | Corrections from the user — what went wrong, what the right approach is |
+| `notes.md` | Anything else useful for future sessions |
+
+Do NOT write to `CLAUDE.md` directly — that file is for role definition and operational instructions, not learned memory.
+
+### Reading memory
+
+At the start of a task that might benefit from past context, read the relevant files:
+
+```bash
+cat /workspace/group/memory/preferences.md
+cat /workspace/group/memory/facts.md
+```
+
+Use `grep -r "keyword" /workspace/group/memory/` to search across all memory files.
+Use `grep -r "topic" /workspace/group/conversations/` to search archived conversations.
+
+### Periodic consolidation
+
+Run this task monthly to keep memory files clean:
+
+```
+Read all files in memory/, merge duplicate entries, remove outdated information (>90 days and not referenced recently), rewrite each file with consolidated content.
+```
+
+You can schedule it:
+```bash
+echo '{"type":"schedule_task","prompt":"Consolidate memory/ files: merge duplicates, remove stale entries older than 90 days, rewrite cleanly.","schedule_type":"cron","schedule_value":"0 3 1 * *","targetJid":"<YOUR_JID>"}' > /workspace/ipc/tasks/consolidate_$(date +%s).json
+```
+
+### Knowledge base (external docs)
+
+For large reference material (wikis, manuals, codebases), use `additionalMounts` — do NOT put them in memory/. The agent queries them on demand with Grep/Read.
+
+Ask the user to add a mount in their registered group config:
+```json
+{ "hostPath": "~/docs/wiki", "containerPath": "wiki", "readonly": true }
+```
+Then search it: `grep -r "topic" /workspace/extra/wiki/`
 
 ## Email Notifications
 

@@ -132,17 +132,18 @@ If there is nothing worth remembering, respond with exactly: nothing to note`;
       return;
     }
 
-    const groupDir = path.join(GROUPS_DIR, groupFolder);
-    fs.mkdirSync(groupDir, { recursive: true });
-    const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
+    const memoryDir = path.join(GROUPS_DIR, groupFolder, 'memory');
+    fs.mkdirSync(memoryDir, { recursive: true });
+    // Corrections go to lessons.md; proactive observations go to notes.md
+    const fileName = hadCorrections ? 'lessons.md' : 'notes.md';
+    const filePath = path.join(memoryDir, fileName);
     const timestamp = new Date().toISOString().slice(0, 10);
-    const section = hadCorrections ? 'Lesson Learned' : 'Session Notes';
-    const entry = `\n## ${section} (${timestamp})\n${content}\n`;
-    fs.appendFileSync(claudeMdPath, entry, 'utf-8');
+    const entry = `\n## ${timestamp}\n${content}\n`;
+    fs.appendFileSync(filePath, entry, 'utf-8');
 
     logger.info(
-      { group: groupFolder, section, chars: content.length },
-      '[reflection] wrote session learnings to CLAUDE.md',
+      { group: groupFolder, file: fileName, chars: content.length },
+      '[reflection] wrote session learnings to memory/',
     );
   } catch (err) {
     const isTimeout = err instanceof Error && err.name === 'AbortError';
