@@ -437,8 +437,8 @@ async function runQuery(
             args: [path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js')],
           },
           gmail: {
-            command: 'npx',
-            args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+            command: 'node',
+            args: [path.join(path.dirname(mcpServerPath), 'gmail-mcp-stdio.js')],
           },
           google_calendar: {
             command: 'node',

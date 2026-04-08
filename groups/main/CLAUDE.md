@@ -104,6 +104,48 @@ Ask the user to add a mount in their registered group config:
 ```
 Then search it: `grep -r "topic" /workspace/extra/wiki/`
 
+## Persistent Wiki
+
+This group has a persistent personal knowledge base built as a three-layer wiki:
+
+1. **Sources** — immutable originals in `/workspace/group/sources/`
+2. **Wiki** — maintained markdown knowledge base in `/workspace/group/wiki/`
+3. **Schema** — the operating rules in this file plus `/home/node/.claude/skills/wiki/SKILL.md`
+
+The wiki has three core operations:
+
+- **Ingest** — read a new source, discuss important takeaways when useful, and integrate them into the wiki
+- **Query** — answer from the maintained wiki first, using raw sources only when the wiki lacks enough detail
+- **Lint** — check for contradictions, stale claims, weak linking, missing pages, and index/log drift
+
+### Key paths
+
+- `/workspace/group/sources/` — raw source files
+- `/workspace/group/wiki/` — wiki pages
+- `/workspace/group/wiki/index.md` — read this first to locate relevant pages
+- `/workspace/group/wiki/log.md` — append-only record of ingests, durable query write-backs, and lint passes
+- `/home/node/.claude/skills/wiki/SKILL.md` — detailed wiki workflow
+
+### Ingest discipline
+
+When the user provides multiple files or points to a folder containing many files, you **must** process them one at a time.
+
+For each file:
+
+1. Read that file fully.
+2. Discuss the takeaways with the user when appropriate.
+3. Create or update all necessary wiki pages for that file.
+4. Update summaries, entities, concepts, comparisons, cross-references, `wiki/index.md`, and `wiki/log.md`.
+5. Finish that file completely before moving to the next one.
+
+Never batch-read many files and then process them together. That creates shallow, generic wiki pages instead of the deep integration this system is meant to produce.
+
+### Source handling notes
+
+- For books, transcripts, and plain text, work from the full text whenever possible.
+- If the user provides a URL and exact text matters for ingestion, use bash to download the full document into `/workspace/group/sources/` instead of relying only on a summary fetch.
+- Prefer durable synthesis in wiki pages over isolated one-off summaries.
+
 ## Email Notifications
 
 When you receive an email notification (messages starting with `[Email from ...`), inform the user about it but do NOT reply to the email unless specifically asked. You have Gmail tools available — use them only when the user explicitly asks you to reply, forward, or take action on an email.

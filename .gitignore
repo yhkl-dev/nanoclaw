@@ -17,6 +17,13 @@ groups/main/*
 groups/global/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
+!groups/main/wiki/
+groups/main/wiki/*
+!groups/main/wiki/index.md
+!groups/main/wiki/log.md
+!groups/main/sources/
+groups/main/sources/*
+!groups/main/sources/.gitkeep
 
 # Secrets
 *.keys.json
