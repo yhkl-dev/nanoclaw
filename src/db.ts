@@ -1,5 +1,4 @@
 import Database from 'better-sqlite3';
-import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -10,17 +9,39 @@ import {
   MODEL_BACKEND,
   STORE_DIR,
 } from './config.js';
-import { isValidGroupFolder } from './group-folder.js';
+import { setRegisteredGroup } from './db-groups.js';
 import { logger } from './logger.js';
 import {
   NewMessage,
   RegisteredGroup,
-  RssSubscription,
   ScheduledTask,
   TaskRunLog,
 } from './types.js';
 
 let db: Database.Database;
+
+/** Shared accessor for sub-modules (db-rss, db-groups). */
+export function getDb(): Database.Database {
+  return db;
+}
+
+// Re-export sub-modules for backward compatibility
+export {
+  createRssSubscription,
+  deleteRssSubscription,
+  getAllRssSubscriptions,
+  getRssSubscriptions,
+  isRssItemSeen,
+  markRssItemSeen,
+  pruneRssSeenItems,
+  updateRssSubscriptionFetched,
+  updateRssSubscriptionTitle,
+} from './db-rss.js';
+export {
+  getAllRegisteredGroups,
+  getRegisteredGroup,
+  setRegisteredGroup,
+} from './db-groups.js';
 const LEGACY_SESSIONS_MIGRATION_KEY = 'legacy_sessions_migrated_backend';
 
 function getAssistantMessagePrefixes(botPrefix: string): string[] {
@@ -690,204 +711,6 @@ export function getAllSessions(backend: string): Record<string, string> {
     result[row.group_folder] = row.session_id;
   }
   return result;
-}
-
-// --- Registered group accessors ---
-
-export function getRegisteredGroup(
-  jid: string,
-): (RegisteredGroup & { jid: string }) | undefined {
-  const row = db
-    .prepare('SELECT * FROM registered_groups WHERE jid = ?')
-    .get(jid) as
-    | {
-        jid: string;
-        name: string;
-        folder: string;
-        trigger_pattern: string;
-        added_at: string;
-        container_config: string | null;
-        requires_trigger: number | null;
-        is_main: number | null;
-      }
-    | undefined;
-  if (!row) return undefined;
-  if (!isValidGroupFolder(row.folder)) {
-    logger.warn(
-      { jid: row.jid, folder: row.folder },
-      'Skipping registered group with invalid folder',
-    );
-    return undefined;
-  }
-  return {
-    jid: row.jid,
-    name: row.name,
-    folder: row.folder,
-    trigger: row.trigger_pattern,
-    added_at: row.added_at,
-    containerConfig: row.container_config
-      ? JSON.parse(row.container_config)
-      : undefined,
-    requiresTrigger:
-      row.requires_trigger === null ? undefined : row.requires_trigger === 1,
-    isMain: row.is_main === 1 ? true : undefined,
-  };
-}
-
-export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
-  if (!isValidGroupFolder(group.folder)) {
-    throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
-  }
-  db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    jid,
-    group.name,
-    group.folder,
-    group.trigger,
-    group.added_at,
-    group.containerConfig ? JSON.stringify(group.containerConfig) : null,
-    group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
-    group.isMain ? 1 : 0,
-  );
-}
-
-export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
-  const rows = db.prepare('SELECT * FROM registered_groups').all() as Array<{
-    jid: string;
-    name: string;
-    folder: string;
-    trigger_pattern: string;
-    added_at: string;
-    container_config: string | null;
-    requires_trigger: number | null;
-    is_main: number | null;
-  }>;
-  const result: Record<string, RegisteredGroup> = {};
-  for (const row of rows) {
-    if (!isValidGroupFolder(row.folder)) {
-      logger.warn(
-        { jid: row.jid, folder: row.folder },
-        'Skipping registered group with invalid folder',
-      );
-      continue;
-    }
-    result[row.jid] = {
-      name: row.name,
-      folder: row.folder,
-      trigger: row.trigger_pattern,
-      added_at: row.added_at,
-      containerConfig: row.container_config
-        ? JSON.parse(row.container_config)
-        : undefined,
-      requiresTrigger:
-        row.requires_trigger === null ? undefined : row.requires_trigger === 1,
-      isMain: row.is_main === 1 ? true : undefined,
-    };
-  }
-  return result;
-}
-
-// --- RSS Subscription CRUD ---
-
-export function createRssSubscription(
-  groupFolder: string,
-  chatJid: string,
-  url: string,
-  title?: string,
-): RssSubscription {
-  const id = randomUUID();
-  const createdAt = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO rss_subscriptions (id, group_folder, chat_jid, url, title, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(id, groupFolder, chatJid, url, title ?? null, createdAt);
-  return {
-    id,
-    group_folder: groupFolder,
-    chat_jid: chatJid,
-    url,
-    title: title ?? null,
-    last_fetched: null,
-    created_at: createdAt,
-  };
-}
-
-export function getRssSubscriptions(groupFolder: string): RssSubscription[] {
-  return db
-    .prepare(
-      'SELECT * FROM rss_subscriptions WHERE group_folder = ? ORDER BY created_at ASC',
-    )
-    .all(groupFolder) as RssSubscription[];
-}
-
-export function getAllRssSubscriptions(): RssSubscription[] {
-  return db
-    .prepare(
-      'SELECT * FROM rss_subscriptions ORDER BY group_folder, created_at ASC',
-    )
-    .all() as RssSubscription[];
-}
-
-export function deleteRssSubscription(id: string): boolean {
-  const result = db
-    .prepare('DELETE FROM rss_subscriptions WHERE id = ?')
-    .run(id);
-  return result.changes > 0;
-}
-
-export function updateRssSubscriptionTitle(id: string, title: string): void {
-  db.prepare('UPDATE rss_subscriptions SET title = ? WHERE id = ?').run(
-    title,
-    id,
-  );
-}
-
-export function updateRssSubscriptionFetched(
-  id: string,
-  lastFetched: string,
-): void {
-  db.prepare('UPDATE rss_subscriptions SET last_fetched = ? WHERE id = ?').run(
-    lastFetched,
-    id,
-  );
-}
-
-export function isRssItemSeen(
-  subscriptionId: string,
-  itemGuid: string,
-): boolean {
-  const row = db
-    .prepare(
-      'SELECT 1 FROM rss_seen_items WHERE subscription_id = ? AND item_guid = ?',
-    )
-    .get(subscriptionId, itemGuid);
-  return row !== undefined;
-}
-
-export function markRssItemSeen(
-  subscriptionId: string,
-  itemGuid: string,
-): void {
-  db.prepare(
-    `INSERT OR IGNORE INTO rss_seen_items (subscription_id, item_guid, seen_at) VALUES (?, ?, ?)`,
-  ).run(subscriptionId, itemGuid, new Date().toISOString());
-}
-
-export function pruneRssSeenItems(
-  subscriptionId: string,
-  keepCount = 500,
-): void {
-  db.prepare(
-    `DELETE FROM rss_seen_items
-     WHERE subscription_id = ? AND item_guid NOT IN (
-       SELECT item_guid FROM rss_seen_items
-       WHERE subscription_id = ?
-       ORDER BY seen_at DESC
-       LIMIT ?
-     )`,
-  ).run(subscriptionId, subscriptionId, keepCount);
 }
 
 // --- JSON migration ---

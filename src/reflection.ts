@@ -339,6 +339,11 @@ If there is nothing worth remembering, respond with exactly: nothing to note`;
       skillPromptExcerpt,
       skillResultExcerpt,
       apiKey,
-    ).catch(() => {});
+    ).catch((err) =>
+      logger.debug(
+        { err, group: groupFolder },
+        '[reflection] skill detection failed',
+      ),
+    );
   }
 }

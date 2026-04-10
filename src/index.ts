@@ -481,7 +481,9 @@ async function runAgent(
         prompt,
         output.result,
         detectCorrectionSignals(prompt),
-      ).catch(() => {});
+      ).catch((err) =>
+        logger.debug({ err, group: group.name }, 'Session reflection failed'),
+      );
     }
 
     return 'success';
