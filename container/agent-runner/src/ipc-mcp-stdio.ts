@@ -337,6 +337,197 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+server.tool(
+  'save_skill',
+  `Save a reusable skill to your personal skills library. Skills are Markdown files that teach you how to handle recurring tasks or workflows.
+
+Use this when:
+- You just solved a complex multi-step problem and want to remember the approach
+- The user taught you a preferred workflow or process
+- You completed a task with a pattern worth reusing (e.g. "how to deploy this project", "how to query this API")
+
+Saved skills persist across sessions and are automatically loaded. They appear under the "user" skill category.
+To update an existing skill, save with the same name — it will be overwritten.`,
+  {
+    name: z.string().describe('Short skill name using lowercase-with-hyphens (e.g. "deploy-backend", "query-clickhouse"). This becomes the skill directory name.'),
+    description: z.string().describe('One-line description of what this skill does, shown in the skills index.'),
+    content: z.string().describe('The skill body in Markdown. Describe the workflow, steps, commands, and context clearly so future sessions can follow it.'),
+    allowed_tools: z.array(z.string()).optional().describe('Tools this skill uses (e.g. ["Bash", "Read", "Write"]). Defaults to common tools if omitted.'),
+    draft: z.boolean().optional().describe('Mark as draft if the skill needs review before relying on it (default: false).'),
+  },
+  async (args) => {
+    // Sanitize name: lowercase, hyphens only, no path traversal
+    const safeName = args.name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60);
+
+    if (!safeName) {
+      return {
+        content: [{ type: 'text' as const, text: 'Invalid skill name. Use lowercase letters, numbers, and hyphens.' }],
+        isError: true,
+      };
+    }
+
+    const skillDir = `/home/node/.claude/skills/user/${safeName}`;
+    const skillFile = `${skillDir}/SKILL.md`;
+
+    try {
+      fs.mkdirSync(skillDir, { recursive: true });
+
+      const tools = args.allowed_tools ?? ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'];
+      const toolsYaml = JSON.stringify(tools);
+      const draftLine = args.draft ? '\ndraft: true' : '';
+      const frontmatter = `---\nname: ${safeName}\ndescription: ${args.description}${draftLine}\nallowed-tools: ${toolsYaml}\ncreated-by: agent\nupdated: ${new Date().toISOString().slice(0, 10)}\n---\n\n`;
+
+      fs.writeFileSync(skillFile, frontmatter + args.content);
+
+      const status = args.draft ? ' (saved as draft — review before relying on it)' : '';
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Skill "${safeName}" saved to skills/user/${safeName}/SKILL.md${status}.\n\nYou can invoke it in future sessions with /${safeName}.`,
+        }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to save skill: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'search_conversations',
+  `Search through archived past conversations and session summaries to recall previous discussions, decisions, or shared information.
+
+Searches three sources:
+- Archived conversations (/workspace/group/conversations/*.md)
+- Structured summaries (/workspace/group/summaries/*.md)
+- Claude Code session index (session titles and first prompts)
+
+Use this when the user refers to something discussed previously, asks "do you remember...", or when context from a past session would be helpful.`,
+  {
+    query: z.string().describe('Keywords or phrases to search for in past conversations'),
+    max_results: z.number().optional().describe('Maximum number of results to return (default: 5)'),
+  },
+  async (args) => {
+    const maxResults = args.max_results ?? 5;
+    const terms = args.query.toLowerCase().split(/\s+/).filter((t) => t.length > 1);
+    if (terms.length === 0) {
+      return { content: [{ type: 'text' as const, text: 'Please provide search terms.' }] };
+    }
+
+    interface SearchResult {
+      source: string;
+      file: string;
+      excerpt: string;
+      score: number;
+    }
+    const results: SearchResult[] = [];
+
+    // Search markdown archives: conversations/ and summaries/
+    const searchDirs = [
+      '/workspace/group/conversations',
+      '/workspace/group/summaries',
+    ];
+
+    for (const dir of searchDirs) {
+      if (!fs.existsSync(dir)) continue;
+      const dirLabel = dir.endsWith('summaries') ? 'summary' : 'conversation';
+
+      const files = fs.readdirSync(dir)
+        .filter((f) => f.endsWith('.md'))
+        .sort()
+        .reverse(); // most recent first
+
+      for (const file of files) {
+        try {
+          const content = fs.readFileSync(path.join(dir, file), 'utf-8');
+          const lower = content.toLowerCase();
+          const score = terms.filter((t) => lower.includes(t)).length;
+          if (score === 0) continue;
+
+          // Collect lines around each match (up to 3 snippets)
+          const lines = content.split('\n');
+          const snippets: string[] = [];
+          for (let i = 0; i < lines.length && snippets.length < 3; i++) {
+            if (terms.some((t) => lines[i].toLowerCase().includes(t))) {
+              const start = Math.max(0, i - 1);
+              const end = Math.min(lines.length - 1, i + 3);
+              snippets.push(lines.slice(start, end + 1).join('\n'));
+            }
+          }
+
+          results.push({
+            source: dirLabel,
+            file,
+            excerpt: snippets.join('\n...\n'),
+            score,
+          });
+        } catch {
+          // skip unreadable files
+        }
+      }
+    }
+
+    // Search Claude Code sessions-index.json files
+    const claudeProjectsBase = '/home/node/.claude/projects';
+    if (fs.existsSync(claudeProjectsBase)) {
+      for (const projectDir of fs.readdirSync(claudeProjectsBase)) {
+        const indexPath = path.join(claudeProjectsBase, projectDir, 'sessions-index.json');
+        if (!fs.existsSync(indexPath)) continue;
+        try {
+          const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8')) as {
+            entries?: Array<{ sessionId: string; summary?: string; firstPrompt?: string }>;
+          };
+          for (const entry of index.entries ?? []) {
+            const text = [entry.summary, entry.firstPrompt].filter(Boolean).join(' ');
+            const lower = text.toLowerCase();
+            const score = terms.filter((t) => lower.includes(t)).length;
+            if (score === 0) continue;
+            results.push({
+              source: 'session',
+              file: `session:${entry.sessionId.slice(0, 8)}`,
+              excerpt: [entry.summary && `Summary: ${entry.summary}`, entry.firstPrompt && `First message: ${entry.firstPrompt.slice(0, 300)}`]
+                .filter(Boolean)
+                .join('\n'),
+              score,
+            });
+          }
+        } catch {
+          // skip malformed index
+        }
+      }
+    }
+
+    if (results.length === 0) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `No past conversations found matching: "${args.query}"\n\nConversation archives are created automatically when context is compacted. If this is a new setup, there may not be any archives yet.`,
+        }],
+      };
+    }
+
+    results.sort((a, b) => b.score - a.score);
+    const top = results.slice(0, maxResults);
+
+    const output = top
+      .map((r) => `### [${r.source}] ${r.file}\n${r.excerpt}`)
+      .join('\n\n---\n\n');
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Found ${results.length} match(es) for "${args.query}" (showing top ${top.length}):\n\n${output}`,
+      }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

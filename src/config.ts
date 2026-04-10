@@ -22,18 +22,6 @@ const envConfig = readEnvFile([
   'NO_PROXY',
   'TAVILY_API_KEY',
   'MODEL_BACKEND',
-  'OLLAMA_ADMIN_TOOLS',
-  'OLLAMA_ENABLE_HOST_SCRIPTS',
-  'OLLAMA_FAST_MODEL',
-  'OLLAMA_HOST',
-  'OLLAMA_HTTP_ALLOW_PRIVATE',
-  'OLLAMA_HTTP_MAX_REDIRECTS',
-  'OLLAMA_HTTP_TIMEOUT_MS',
-  'OLLAMA_MODEL',
-  'OLLAMA_MODEL_ROUTES',
-  'OLLAMA_SESSION_RECENT_MESSAGES',
-  'OLLAMA_SESSION_SUMMARY_MAX_CHARS',
-  'OLLAMA_THINK',
   'RSS_POLL_INTERVAL_MS',
   'TZ',
   'WECOM_BOT_ID',
@@ -61,90 +49,6 @@ export const ASSISTANT_HAS_OWN_NUMBER =
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const MODEL_BACKEND =
   process.env.MODEL_BACKEND || envConfig.MODEL_BACKEND || 'claude';
-export const OLLAMA_ADMIN_TOOLS =
-  (process.env.OLLAMA_ADMIN_TOOLS || envConfig.OLLAMA_ADMIN_TOOLS) === 'true';
-export const OLLAMA_ENABLE_HOST_SCRIPTS =
-  (process.env.OLLAMA_ENABLE_HOST_SCRIPTS ||
-    envConfig.OLLAMA_ENABLE_HOST_SCRIPTS) === 'true';
-export const OLLAMA_HOST = process.env.OLLAMA_HOST || envConfig.OLLAMA_HOST;
-export const OLLAMA_HTTP_ALLOW_PRIVATE =
-  (process.env.OLLAMA_HTTP_ALLOW_PRIVATE ||
-    envConfig.OLLAMA_HTTP_ALLOW_PRIVATE) === 'true';
-export const OLLAMA_HTTP_MAX_REDIRECTS = Math.max(
-  0,
-  parseInt(
-    process.env.OLLAMA_HTTP_MAX_REDIRECTS ||
-      envConfig.OLLAMA_HTTP_MAX_REDIRECTS ||
-      '5',
-    10,
-  ) || 5,
-);
-export const OLLAMA_HTTP_TIMEOUT_MS = Math.max(
-  1_000,
-  parseInt(
-    process.env.OLLAMA_HTTP_TIMEOUT_MS ||
-      envConfig.OLLAMA_HTTP_TIMEOUT_MS ||
-      '20000',
-    10,
-  ) || 20_000,
-);
-export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || envConfig.OLLAMA_MODEL;
-// OLLAMA_FAST_MODEL: optional smaller/faster model for simple conversational messages.
-// When set, short prompts that don't require tools or complex reasoning are routed here.
-export const OLLAMA_FAST_MODEL =
-  process.env.OLLAMA_FAST_MODEL || envConfig.OLLAMA_FAST_MODEL || undefined;
-export const OLLAMA_SESSION_RECENT_MESSAGES = Math.max(
-  2,
-  parseInt(
-    process.env.OLLAMA_SESSION_RECENT_MESSAGES ||
-      envConfig.OLLAMA_SESSION_RECENT_MESSAGES ||
-      '12',
-    10,
-  ) || 12,
-);
-export const OLLAMA_SESSION_SUMMARY_MAX_CHARS = Math.max(
-  256,
-  parseInt(
-    process.env.OLLAMA_SESSION_SUMMARY_MAX_CHARS ||
-      envConfig.OLLAMA_SESSION_SUMMARY_MAX_CHARS ||
-      '2000',
-    10,
-  ) || 2000,
-);
-// OLLAMA_THINK: set to 'true' to enable extended thinking for qwen3-style models.
-// Defaults to false because thinking mode makes tool calling unreliable.
-export const OLLAMA_THINK =
-  (process.env.OLLAMA_THINK || envConfig.OLLAMA_THINK) === 'true';
-// OLLAMA_NUM_CTX: context window size sent to Ollama. Lower values reduce VRAM
-// and speed up prefill. Default 8192 is sufficient for 12 recent messages + system prompt.
-const rawNumCtx = process.env.OLLAMA_NUM_CTX || envConfig.OLLAMA_NUM_CTX;
-export const OLLAMA_NUM_CTX: number | undefined = rawNumCtx
-  ? Math.max(512, parseInt(rawNumCtx, 10) || 8192)
-  : undefined;
-// OLLAMA_TEMPERATURE: sampling temperature. Lower = more deterministic.
-const rawTemp = process.env.OLLAMA_TEMPERATURE || envConfig.OLLAMA_TEMPERATURE;
-export const OLLAMA_TEMPERATURE: number | undefined = rawTemp
-  ? Math.max(0, Math.min(2, parseFloat(rawTemp) || 0.7))
-  : undefined;
-// OLLAMA_CHAT_RETRIES: retry count for transient Ollama chat errors (timeout, connection).
-export const OLLAMA_CHAT_RETRIES = Math.max(
-  0,
-  parseInt(
-    process.env.OLLAMA_CHAT_RETRIES || envConfig.OLLAMA_CHAT_RETRIES || '2',
-    10,
-  ) || 2,
-);
-// OLLAMA_KEEP_ALIVE: how long Ollama keeps the model loaded in VRAM after a request.
-// Default "30m". Set to "0" to unload immediately, or "-1" to keep forever.
-export const OLLAMA_KEEP_ALIVE: string =
-  process.env.OLLAMA_KEEP_ALIVE || envConfig.OLLAMA_KEEP_ALIVE || '30m';
-// OLLAMA_NUM_PREDICT: max tokens to generate per response. Lower values in tool-calling
-// rounds save time; final response rounds can use a higher budget.
-const rawNumPredict =
-  process.env.OLLAMA_NUM_PREDICT || envConfig.OLLAMA_NUM_PREDICT;
-export const OLLAMA_NUM_PREDICT: number | undefined = rawNumPredict
-  ? Math.max(64, parseInt(rawNumPredict, 10) || 2048)
-  : undefined;
 export const WECOM_BOT_ID = process.env.WECOM_BOT_ID || envConfig.WECOM_BOT_ID;
 export const WECOM_BOT_SECRET =
   process.env.WECOM_BOT_SECRET || envConfig.WECOM_BOT_SECRET;
@@ -195,7 +99,6 @@ export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,
 );
-export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
@@ -259,10 +162,3 @@ export const RSS_POLL_INTERVAL_MS = Math.max(
     10,
   ) || 1_800_000,
 );
-
-// Ollama multi-model routing rules.
-// Format: "keyword1:model1,keyword2:model2"
-// Keywords are matched case-insensitively against the full prompt.
-// First match wins; falls back to OLLAMA_MODEL if no rule matches.
-export const OLLAMA_MODEL_ROUTES: string | undefined =
-  process.env.OLLAMA_MODEL_ROUTES || envConfig.OLLAMA_MODEL_ROUTES || undefined;

@@ -40,7 +40,6 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
-  ollamaModel?: string; // Per-group Ollama model override (takes precedence over routing rules)
 }
 
 export interface RssSubscription {

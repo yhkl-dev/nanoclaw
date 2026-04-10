@@ -92,7 +92,15 @@ let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
 // Transient image cache: message ID → base64 image data (not persisted to DB)
-const pendingImages = new Map<string, string[]>();
+// Entries are evicted after TTL to prevent unbounded memory growth.
+const PENDING_IMAGE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const pendingImages = new Map<string, { data: string[]; addedAt: number }>();
+setInterval(() => {
+  const cutoff = Date.now() - PENDING_IMAGE_TTL_MS;
+  for (const [id, entry] of pendingImages) {
+    if (entry.addedAt < cutoff) pendingImages.delete(id);
+  }
+}, PENDING_IMAGE_TTL_MS).unref();
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -295,9 +303,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // Collect any pending image data for these messages (cleared after use)
   const images = missedMessages.flatMap((m) => {
-    const imgs = pendingImages.get(m.id);
-    if (imgs) pendingImages.delete(m.id);
-    return imgs ?? [];
+    const entry = pendingImages.get(m.id);
+    if (entry) pendingImages.delete(m.id);
+    return entry?.data ?? [];
   });
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
@@ -724,7 +732,7 @@ async function main(): Promise<void> {
         }
       }
       if (msg.imageData?.length) {
-        pendingImages.set(msg.id, msg.imageData);
+        pendingImages.set(msg.id, { data: msg.imageData, addedAt: Date.now() });
       }
       storeMessage(msg);
     },

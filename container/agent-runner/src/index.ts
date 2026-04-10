@@ -143,7 +143,84 @@ function getSessionSummary(sessionId: string, transcriptPath: string): string | 
 }
 
 /**
+ * Call Claude Haiku via the credential proxy to generate a structured summary.
+ * Uses the same ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY env vars already set in the container.
+ */
+async function generateStructuredSummary(messages: ParsedMessage[]): Promise<string | null> {
+  if (messages.length < 4) return null;
+
+  const baseUrl = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+  const apiKey = process.env.ANTHROPIC_API_KEY || 'placeholder';
+
+  // Use last 40 messages, truncating long content to keep prompt small
+  const excerpt = messages
+    .slice(-40)
+    .map((m) => {
+      const role = m.role === 'user' ? 'User' : 'Assistant';
+      const content = m.content.length > 600 ? m.content.slice(0, 600) + '...' : m.content;
+      return `**${role}**: ${content}`;
+    })
+    .join('\n\n');
+
+  const prompt = `You are summarizing a conversation for future reference. Create a concise structured summary with these exact sections:
+
+## Goal
+What was the user trying to accomplish?
+
+## Progress
+What was completed or attempted? (bullet points)
+
+## Key Decisions
+Important decisions, conclusions, or preferences expressed. (bullet points, omit if none)
+
+## Files & Resources
+Files created/modified, URLs, tools, or resources mentioned. (bullet points, omit if none)
+
+## Open Items
+Unresolved questions or explicit next steps. (bullet points, omit if none)
+
+Keep each section brief. Omit empty sections.
+
+Conversation to summarize:
+${excerpt}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SUMMARY_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      log(`Summary API call failed: ${response.status} ${response.statusText}`);
+      return null;
+    }
+
+    const data = await response.json() as { content?: Array<{ type: string; text: string }> };
+    return data.content?.find((c) => c.type === 'text')?.text ?? null;
+  } catch (err) {
+    clearTimeout(timer);
+    log(`Failed to generate structured summary: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+/**
  * Archive the full transcript to conversations/ before compaction.
+ * Also generates a structured summary via Haiku and saves to summaries/.
  */
 function createPreCompactHook(assistantName?: string): HookCallback {
   return async (input, _toolUseId, _context) => {
@@ -167,18 +244,26 @@ function createPreCompactHook(assistantName?: string): HookCallback {
 
       const summary = getSessionSummary(sessionId, transcriptPath);
       const name = summary ? sanitizeFilename(summary) : generateFallbackName();
+      const date = new Date().toISOString().split('T')[0];
 
+      // Archive full conversation transcript
       const conversationsDir = '/workspace/group/conversations';
       fs.mkdirSync(conversationsDir, { recursive: true });
-
-      const date = new Date().toISOString().split('T')[0];
-      const filename = `${date}-${name}.md`;
-      const filePath = path.join(conversationsDir, filename);
-
+      const transcriptFile = path.join(conversationsDir, `${date}-${name}.md`);
       const markdown = formatTranscriptMarkdown(messages, summary, assistantName);
-      fs.writeFileSync(filePath, markdown);
+      fs.writeFileSync(transcriptFile, markdown);
+      log(`Archived conversation to ${transcriptFile}`);
 
-      log(`Archived conversation to ${filePath}`);
+      // Generate and save structured summary via Haiku (fire-and-forget style, but await)
+      const structuredSummary = await generateStructuredSummary(messages);
+      if (structuredSummary) {
+        const summariesDir = '/workspace/group/summaries';
+        fs.mkdirSync(summariesDir, { recursive: true });
+        const summaryFile = path.join(summariesDir, `${date}-${name}.md`);
+        const header = `# ${summary || 'Conversation Summary'}\n\nArchived: ${new Date().toISOString()}\n\n---\n\n`;
+        fs.writeFileSync(summaryFile, header + structuredSummary);
+        log(`Saved structured summary to ${summaryFile}`);
+      }
     } catch (err) {
       log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -414,7 +499,6 @@ async function runQuery(
           'TodoWrite', 'ToolSearch', 'Skill',
           'NotebookEdit',
           'mcp__nanoclaw__*',
-          'mcp__ollama__*',
           'mcp__gmail__*',
           'mcp__google_calendar__*',
         ],
@@ -431,10 +515,6 @@ async function runQuery(
               NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
               NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
             },
-          },
-          ollama: {
-            command: 'node',
-            args: [path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js')],
           },
           gmail: {
             command: 'node',
@@ -495,6 +575,7 @@ interface ScriptResult {
 }
 
 const SCRIPT_TIMEOUT_MS = 30_000;
+const SUMMARY_TIMEOUT_MS = 20_000;
 
 async function runScript(script: string): Promise<ScriptResult | null> {
   const scriptPath = '/tmp/task-script.sh';
